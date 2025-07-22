@@ -1,0 +1,4 @@
+name: MovementTracker
+version: '1.0'
+main: me.red.movementracker.MovementTracker
+api-version: '1.21'
