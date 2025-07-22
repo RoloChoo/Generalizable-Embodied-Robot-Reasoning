@@ -1,2 +1,2 @@
 # Generalizable Embodied Robot Reasoning : A Unified Platform and Benchmark Framework in open world
-cmake 
+The AIAgents simulation environment and MineCollab benchmark suite are used in this paper to evaluate large language model (LLM) agents in embodied multi-agent environments. MineCollab offers procedurally generated collaborative cooking, crafting, and building activities, while AIAgents provides high-level tool abstractions for open world agent interaction.
