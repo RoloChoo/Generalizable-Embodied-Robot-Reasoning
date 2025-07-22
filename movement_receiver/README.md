@@ -1,6 +1,6 @@
-# 🎯 hookMain – Ultra Simple, Ultra Effective
+# 🎯 movement receiver – Ultra Simple, Ultra Effective
 
-**hookMain** is a minimalistic tracking system designed with clarity and performance in mind.  
+**movement receiver** is a minimalistic tracking system designed with clarity and performance in mind.  
 No bloated data structures, no unnecessary overhead.
 used mongodb
 
