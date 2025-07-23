@@ -1,0 +1,9 @@
+{
+    "name": "Grok",
+
+    "model": "grok-3-mini",
+
+    "vision_model": "grok-2-vision-1212",
+    
+    "embedding": "openai"
+}

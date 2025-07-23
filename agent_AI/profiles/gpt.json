@@ -1,0 +1,10 @@
+{
+    "name": "gpt",
+
+    "model": {
+        "model": "gpt-4.1",
+        "params": {
+            "temperature": 0.5
+        }
+    }
+}

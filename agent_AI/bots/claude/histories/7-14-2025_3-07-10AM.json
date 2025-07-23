@@ -1,0 +1,27 @@
+[
+    {
+        "role": "system",
+        "content": "(AUTO MESSAGE)Your previous action 'mode:self_defense' was interrupted by unstuck.\n        Your behavior log: Fighting pillager!\nFighting slime!\nFighting zombie!\nI'm stuck!\n\nRespond accordingly.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "My brain disconnected, try again.",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Got stuck and couldn't get unstuck",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Agent process restarted.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "My brain disconnected, try again.",
+        "imagePath": null
+    }
+]
