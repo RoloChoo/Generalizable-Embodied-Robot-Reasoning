@@ -9,4 +9,5 @@ We evaluate prominent LLMs including GPT-4o, Claude 3.5 Sonnet, and LLaMA3 varia
 https://zenodo.org/records/16308744
 # contacts
 https://discord.gg/22wjZfNGQR
-faxaistudy@gmail.com>
+
+faxaistudy@gmail.com
