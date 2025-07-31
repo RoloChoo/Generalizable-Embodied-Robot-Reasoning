@@ -8,6 +8,9 @@ We evaluate prominent LLMs including GPT-4o, Claude 3.5 Sonnet, and LLaMA3 varia
 
 # Paper
 https://zenodo.org/records/16308744
+
+https://drive.google.com/drive/folders/1HxQyxrkkaH2qIKvcEIihZL3ONeRBNscD?usp=sharing
+
 # contacts
 https://discord.gg/22wjZfNGQR
 
