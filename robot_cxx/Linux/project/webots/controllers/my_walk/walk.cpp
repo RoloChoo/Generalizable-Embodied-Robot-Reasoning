@@ -33,6 +33,21 @@ bool shouldStopWalk = false;
 double xAmplitude = 0.0;
 double yAmplitude = 0.0;
 double aAmplitude = 0.0;
+
+// LED 제어 전역변수
+bool eyeLedOn = true;
+bool headLedOn = true;
+bool shouldToggleEyeLed = false;
+bool shouldToggleHeadLed = false;
+int eyeLedColor = 0x00FF00;    // 기본 초록색
+int headLedColor = 0xFF0000;   // 기본 빨간색
+
+// LED 깜빡임 효과용 변수
+bool blinkMode = false;
+bool shouldToggleBlink = false;
+double lastBlinkTime = 0.0;
+bool blinkState = true;
+
 pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *motorNames[NMOTORS] = {
@@ -52,31 +67,69 @@ char* load_html() {
             "Access-Control-Allow-Origin: *\r\n"
             "Connection: close\r\n\r\n"
             "<!DOCTYPE html>"
-            "<html><head><title>Robot Control</title></head><body>"
-            "<h1>DARwIn-OP Robot Control</h1>"
-            "<div style='margin: 10px;'>"
-            "<button onclick=\"sendCommand('walk_start')\" style='padding: 10px; margin: 5px; background: green; color: white;'>Start Walking</button>"
-            "<button onclick=\"sendCommand('walk_stop')\" style='padding: 10px; margin: 5px; background: red; color: white;'>Stop Walking</button>"
+            "<html><head><title>Robot Control</title>"
+            "<style>"
+            "body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }"
+            "h1 { color: #333; text-align: center; }"
+            "h3 { color: #555; margin-top: 20px; }"
+            ".control-group { background: white; padding: 15px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }"
+            "button { padding: 12px 16px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }"
+            ".walk-btn { background: #4CAF50; color: white; }"
+            ".stop-btn { background: #f44336; color: white; }"
+            ".move-btn { background: #2196F3; color: white; }"
+            ".led-btn { background: #FF9800; color: white; }"
+            ".eye-led-btn { background: #9C27B0; color: white; }"
+            ".blink-btn { background: #607D8B; color: white; }"
+            "button:hover { opacity: 0.8; transform: translateY(-1px); }"
+            "#status { background: #e8f5e8; border: 1px solid #4CAF50; color: #2e7d32; }"
+            "</style>"
+            "</head><body>"
+            "<h1>🤖 DARwIn-OP Robot Control</h1>"
+            
+            "<div class='control-group'>"
+            "<h3>🚶 Walking Control</h3>"
+            "<button class='walk-btn' onclick=\"sendCommand('walk_start')\">▶️ Start Walking</button>"
+            "<button class='stop-btn' onclick=\"sendCommand('walk_stop')\">⏹️ Stop Walking</button>"
             "</div>"
-            "<div style='margin: 10px;'>"
-            "<button onclick=\"sendCommand('move_forward')\" style='padding: 10px; margin: 5px;'>Forward</button>"
-            "<button onclick=\"sendCommand('move_backward')\" style='padding: 10px; margin: 5px;'>Backward</button>"
+            
+            "<div class='control-group'>"
+            "<h3>🧭 Direction Control</h3>"
+            "<button class='move-btn' onclick=\"sendCommand('move_forward')\">⬆️ Forward</button>"
+            "<button class='move-btn' onclick=\"sendCommand('move_backward')\">⬇️ Backward</button><br>"
+            "<button class='move-btn' onclick=\"sendCommand('turn_left')\">⬅️ Turn Left</button>"
+            "<button class='move-btn' onclick=\"sendCommand('turn_right')\">➡️ Turn Right</button>"
             "</div>"
-            "<div style='margin: 10px;'>"
-            "<button onclick=\"sendCommand('turn_left')\" style='padding: 10px; margin: 5px;'>Turn Left</button>"
-            "<button onclick=\"sendCommand('turn_right')\" style='padding: 10px; margin: 5px;'>Turn Right</button>"
+            
+            "<div class='control-group'>"
+            "<h3>💡 LED Control</h3>"
+            "<button class='eye-led-btn' onclick=\"sendCommand('eye_led_toggle')\">👁️ Toggle Eye LED</button>"
+            "<button class='led-btn' onclick=\"sendCommand('head_led_toggle')\">💡 Toggle Head LED</button><br>"
+            "<button class='blink-btn' onclick=\"sendCommand('led_blink_toggle')\">✨ Toggle Blink Mode</button>"
             "</div>"
-            "<div id='status' style='margin: 10px; padding: 10px; background: #f0f0f0;'>Ready</div>"
+            
+            "<div id='status' class='control-group'>🟢 Ready - Robot control interface loaded</div>"
+            
             "<script>"
             "function sendCommand(cmd) {"
-            "  document.getElementById('status').innerText = 'Sending: ' + cmd;"
+            "  const statusDiv = document.getElementById('status');"
+            "  statusDiv.innerHTML = '🔄 Sending: ' + cmd;"
+            "  statusDiv.style.background = '#fff3e0';"
+            "  statusDiv.style.borderColor = '#FF9800';"
+            "  statusDiv.style.color = '#e65100';"
+            "  "
             "  fetch('/?command=' + cmd)"
             "    .then(response => response.text())"
             "    .then(data => {"
-            "      document.getElementById('status').innerText = 'Command sent: ' + cmd;"
+            "      statusDiv.innerHTML = '✅ Command sent: ' + cmd;"
+            "      statusDiv.style.background = '#e8f5e8';"
+            "      statusDiv.style.borderColor = '#4CAF50';"
+            "      statusDiv.style.color = '#2e7d32';"
             "    })"
             "    .catch(error => {"
-            "      document.getElementById('status').innerText = 'Error: ' + error;"
+            "      statusDiv.innerHTML = '❌ Error: ' + error;"
+            "      statusDiv.style.background = '#ffebee';"
+            "      statusDiv.style.borderColor = '#f44336';"
+            "      statusDiv.style.color = '#c62828';"
             "    });"
             "}"
             "</script>"
@@ -91,7 +144,6 @@ char* load_html() {
     long size = ftell(f);
     rewind(f);
     
-    // HTTP 헤더 추가
     const char* header = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n";
     char* html = (char*)malloc(strlen(header) + size + 1);
     strcpy(html, header);
@@ -160,7 +212,6 @@ void* server(void* arg) {
         buf[bytes_read] = '\0';
         printf("Received request:\n%s\n", buf);
         
-        // GET 라인 파싱
         char *get_line = strtok(buf, "\r\n");
         if (!get_line) {
             close(client);
@@ -171,6 +222,7 @@ void* server(void* arg) {
         
         pthread_mutex_lock(&stateMutex);
         
+        // 걷기 제어 명령
         if (strstr(get_line, "command=walk_start")) {
             shouldStartWalk = true;
             printf("Walk start command received\n");
@@ -179,6 +231,7 @@ void* server(void* arg) {
             shouldStopWalk = true;
             printf("Walk stop command received\n");
         }
+        // 방향 제어 명령
         else if (strstr(get_line, "command=move_forward")) {
             xAmplitude = (xAmplitude == 1.0) ? 0.0 : 1.0;
             printf("Forward command: amplitude = %.1f\n", xAmplitude);
@@ -195,10 +248,22 @@ void* server(void* arg) {
             aAmplitude = (aAmplitude == -0.5) ? 0.0 : -0.5;
             printf("Right turn command: amplitude = %.1f\n", aAmplitude);
         }
+        // LED 제어 명령
+        else if (strstr(get_line, "command=eye_led_toggle")) {
+            shouldToggleEyeLed = true;
+            printf("Eye LED toggle command received\n");
+        }
+        else if (strstr(get_line, "command=head_led_toggle")) {
+            shouldToggleHeadLed = true;
+            printf("Head LED toggle command received\n");
+        }
+        else if (strstr(get_line, "command=led_blink_toggle")) {
+            shouldToggleBlink = true;
+            printf("LED blink toggle command received\n");
+        }
         
         pthread_mutex_unlock(&stateMutex);
         
-        // HTTP 응답 전송
         char* response = load_html();
         send(client, response, strlen(response), 0);
         free(response);
@@ -214,8 +279,14 @@ void* server(void* arg) {
 Walk::Walk(): Robot() {
   mTimeStep = getBasicTimeStep();
   
-  getLED("HeadLed")->set(0xFF0000);
-  getLED("EyeLed")->set(0x00FF00);
+  // LED 초기화 (VisualTracking 방식 참고)
+  mEyeLED = getLED("EyeLed");
+  mHeadLED = getLED("HeadLed");
+  
+  // 초기 LED 상태 설정
+  mEyeLED->set(eyeLedColor);
+  mHeadLED->set(headLedColor);
+  
   mAccelerometer = getAccelerometer("Accelerometer");
   mAccelerometer->enable(mTimeStep);
   
@@ -250,9 +321,63 @@ void Walk::wait(int ms) {
     myStep();
 }
 
+void Walk::updateLEDs() {
+    // LED 토글 명령 처리
+    if (shouldToggleEyeLed) {
+        eyeLedOn = !eyeLedOn;
+        shouldToggleEyeLed = false;
+        printf("Eye LED %s\n", eyeLedOn ? "ON" : "OFF");
+    }
+    
+    if (shouldToggleHeadLed) {
+        headLedOn = !headLedOn;
+        shouldToggleHeadLed = false;
+        printf("Head LED %s\n", headLedOn ? "ON" : "OFF");
+    }
+    
+    if (shouldToggleBlink) {
+        blinkMode = !blinkMode;
+        shouldToggleBlink = false;
+        lastBlinkTime = getTime();
+        printf("Blink mode %s\n", blinkMode ? "ON" : "OFF");
+    }
+    
+    // 깜빡임 모드 처리
+    if (blinkMode) {
+        double currentTime = getTime();
+        if (currentTime - lastBlinkTime > 0.5) {  // 0.5초마다 깜빡임
+            blinkState = !blinkState;
+            lastBlinkTime = currentTime;
+        }
+        
+        // 깜빡임 상태에 따라 LED 설정
+        if (blinkState) {
+            if (eyeLedOn) mEyeLED->set(eyeLedColor);
+            if (headLedOn) mHeadLED->set(headLedColor);
+        } else {
+            mEyeLED->set(0x000000);  // OFF
+            mHeadLED->set(0x000000); // OFF
+        }
+    } else {
+        // 일반 모드에서 LED 상태 적용
+        if (eyeLedOn) {
+            mEyeLED->set(eyeLedColor);
+        } else {
+            mEyeLED->set(0x000000);  // OFF
+        }
+        
+        if (headLedOn) {
+            mHeadLED->set(headLedColor);
+        } else {
+            mHeadLED->set(0x000000);  // OFF
+        }
+    }
+}
+
 void Walk::run() {
-  cout << "-------Walk example of DARwIn-OP-------" << endl;
+  cout << "-------Walk example of DARwIn-OP with LED Control-------" << endl;
   cout << "Web control enabled on http://localhost:8080" << endl;
+  cout << "Features: Walking control + LED on/off + Blink mode" << endl;
   
   // 웹 서버 스레드 시작
   pthread_t serverThread;
@@ -271,6 +396,9 @@ void Walk::run() {
     checkIfFallen();
     
     pthread_mutex_lock(&stateMutex);
+    
+    // LED 상태 업데이트
+    updateLEDs();
     
     // Walk start/stop 처리
     if (shouldStartWalk && !isWalking) {
