@@ -58,7 +58,7 @@ bool shouldToggleBlink = false;
 double lastBlinkTime = 0.0;
 bool blinkState = true;
 
-// (추가) Yaw 제어(“Soccer” 스타일)
+// (추가) Yaw 제어("Soccer" 스타일)
 double webYawDeg = -1.0;            // 웹에서 받은 Minecraft-like yaw [0..360], <0면 비활성
 string turnDirection = "NONE";       // "LEFT" / "RIGHT" / "NONE"
 double targetYawRad = 0.0;           // 목표 목 각(라디안)
@@ -129,14 +129,13 @@ char* load_html() {
       "</div>"
 
       "<div class='control-group'>"
-      "<h3>🧠 Head / Yaw Control (Original-Style Filter)</h3>"
+      "<h3>🧠 Head / Yaw Control (Separated)</h3>"
       "<div class='row'>"
       "<label>Yaw: <span id='yawVal' class='mono'>-</span>°</label>"
       "<input id='yawRange' type='range' min='0' max='360' value='180' oninput='setYaw(this.value)'/>"
       "<button class='yaw-btn' onclick=\"setYaw(180)\">🎯 Center Head</button>"
-      "<button class='yaw-btn' onclick=\"sendCommand('turn_none')\">🚫 Turn NONE</button>"
       "</div>"
-      "<small>Tip: 슬라이더를 움직이면 Yaw 기반 제어가 활성화되고, 로봇 목(Neck)에 저속 누적 필터(α=0.015)가 적용됩니다.</small>"
+      "<small>Tip: 슬라이더를 움직이면 목이 독립적으로 움직입니다 (걷기와 무관).</small>"
       "</div>"
 
       "<div class='control-group'>"
@@ -266,20 +265,12 @@ void* server(void* arg) {
       printf("Backward: x=%.1f\n", xAmplitude);
     }
     else if (strstr(get_line, "command=turn_left")) {
-      // 수동 토글도 유지, 동시에 yaw 기반 turnDirection도 반영
       aAmplitude = (aAmplitude == 0.5) ? 0.0 : 0.5;
-      turnDirection = "LEFT";
       printf("Turn LEFT (manual a=%.1f)\n", aAmplitude);
     }
     else if (strstr(get_line, "command=turn_right")) {
       aAmplitude = (aAmplitude == -0.5) ? 0.0 : -0.5;
-      turnDirection = "RIGHT";
       printf("Turn RIGHT (manual a=%.1f)\n", aAmplitude);
-    }
-    else if (strstr(get_line, "command=turn_none")) {
-      turnDirection = "NONE";
-      aAmplitude = 0.0; // 수동 기준도 0으로
-      printf("Turn NONE\n");
     }
     // ---- Yaw 설정 ----
     else if (strstr(get_line, "command=set_yaw")) {
@@ -436,7 +427,7 @@ static inline double convertYawToNeckAngle(double yawDeg) {
 
 // ------------------------ 메인 루프 ------------------------
 void Walk::run() {
-  cout << "-------Walk example of DARwIn-OP with HTML + Yaw Filter-------" << endl;
+  cout << "-------Walk example of DARwIn-OP with Separated Control-------" << endl;
   cout << "Web control:  http://localhost:8080" << endl;
 
   // 웹 서버 스레드 시작
@@ -480,50 +471,39 @@ void Walk::run() {
       cout << "Gait stopped." << endl;
     }
 
-    // 3) 보행/회전 제어
+    // 3) 목 제어 (걷기와 무관하게 항상 동작)
+    bool yawMode = (webYawDeg >= 0.0);
+    if (yawMode) {
+      double target = convertYawToNeckAngle(webYawDeg);
+      targetYawRad = target;
+      filteredYawRad = YAW_FILTER_ALPHA * targetYawRad + (1.0 - YAW_FILTER_ALPHA) * filteredYawRad;
+      filteredYawRad = clamp(filteredYawRad, minMotorPositions[NECK_INDEX], maxMotorPositions[NECK_INDEX]);
+      mMotors[NECK_INDEX]->setPosition(filteredYawRad);
+      
+      // 목 움직임에 따른 LED 색상 표시
+      if (!blinkMode && eyeLedOn) {
+        mEyeLED->set(0x00FFFF); // 시안색 (목 제어 활성)
+      }
+    }
+
+    // 4) 걷기 제어 (걷기 상태일 때만, 순수 버튼 제어)
     if (isWalking && gaitStarted) {
-      bool yawMode = (webYawDeg >= 0.0);  // 슬라이더 한 번이라도 움직이면 활성화
-
-      if (yawMode) {
-        // --- (A) Yaw 기반: "원본 스타일" ---
-        // 3-1. 목표/필터 Yaw 계산 + Neck 모터 적용
-        double target = convertYawToNeckAngle(webYawDeg);
-        targetYawRad = target;
-        filteredYawRad = YAW_FILTER_ALPHA * targetYawRad + (1.0 - YAW_FILTER_ALPHA) * filteredYawRad;
-        filteredYawRad = clamp(filteredYawRad, minMotorPositions[NECK_INDEX], maxMotorPositions[NECK_INDEX]);
-        mMotors[NECK_INDEX]->setPosition(filteredYawRad);
-
-        // 3-2. 회전 방향에 따른 보행 파라미터
-        if (turnDirection == "LEFT") {
-          if (!blinkMode && eyeLedOn) mEyeLED->set(0xFF9900); // 주황
-          mGaitManager->setXAmplitude(0.5);          // 천천히 전진
-          mGaitManager->setAAmplitude(filteredYawRad);// 목 각도만큼 회전
-        } else if (turnDirection == "RIGHT") {
-          if (!blinkMode && eyeLedOn) mEyeLED->set(0x9900FF); // 보라
-          mGaitManager->setXAmplitude(0.5);
-          mGaitManager->setAAmplitude(filteredYawRad);
-        } else { // NONE
-          if (!blinkMode && eyeLedOn) mEyeLED->set(0x00FF00); // 초록
-          double yawDiff = fabs(targetYawRad - prevTargetYawRad);
-          if (yawDiff < 0.1) {
-            // 미세 변화: 빠르게 전진, 회전은 절반
-            mGaitManager->setXAmplitude(1.0);
-            mGaitManager->setAAmplitude(filteredYawRad * 0.5);
-          } else {
-            // 큰 변화: 천천히 전진, 회전 충분히
-            mGaitManager->setXAmplitude(0.5);
-            mGaitManager->setAAmplitude(filteredYawRad);
-          }
+      mGaitManager->setXAmplitude(xAmplitude);
+      mGaitManager->setYAmplitude(yAmplitude);
+      mGaitManager->setAAmplitude(aAmplitude);
+      mGaitManager->step(mTimeStep);
+      
+      // 걷기 상태에 따른 Head LED 색상
+      if (!blinkMode && headLedOn) {
+        if (xAmplitude > 0) {
+          mHeadLED->set(0x00FF00); // 전진시 초록
+        } else if (xAmplitude < 0) {
+          mHeadLED->set(0xFF0000); // 후진시 빨강
+        } else if (aAmplitude != 0) {
+          mHeadLED->set(0x0000FF); // 회전시 파랑
+        } else {
+          mHeadLED->set(headLedColor); // 기본 색상
         }
-
-        mGaitManager->step(mTimeStep);
-        prevTargetYawRad = targetYawRad;
-      } else {
-        // --- (B) 수동(기존 버튼) 모드 ---
-        mGaitManager->setXAmplitude(xAmplitude);
-        mGaitManager->setYAmplitude(yAmplitude);
-        mGaitManager->setAAmplitude(aAmplitude);
-        mGaitManager->step(mTimeStep);
       }
     }
 
