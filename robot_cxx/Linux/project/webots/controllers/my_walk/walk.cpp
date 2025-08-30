@@ -66,6 +66,12 @@ double filteredYawRad = 0.0;         // 저속 누적 필터 결과
 double prevTargetYawRad = 0.0;       // 이전 목표 라디안
 const double YAW_FILTER_ALPHA = 0.015;
 
+// [NEW] (추가) 오른쪽 팔 제어(Separated)
+double webRightArmDeg = -1.0;        // 웹에서 받은 팔 각도 [0..180], <0면 비활성
+double targetArmRad = 0.0;           // 목표 팔 각(라디안)
+double filteredArmRad = 0.0;         // 저속 누적 필터 결과
+const double ARM_FILTER_ALPHA = 0.020; // 팔은 목보다 약간 빠르게
+
 // (모터 한계값)
 static double minMotorPositions[NMOTORS];
 static double maxMotorPositions[NMOTORS];
@@ -80,11 +86,16 @@ static const char *motorNames[NMOTORS] = {
   "FootR","FootL","Neck","Head"
 };
 
+// [NEW] 팔 관련 인덱스 (motorNames 배열 기준)
+static const int SHOULDER_R_INDEX   = 0; // "ShoulderR"
+static const int ARM_UPPER_R_INDEX  = 2; // "ArmUpperR"
+static const int ARM_LOWER_R_INDEX  = 4; // "ArmLowerR"
+
 // ------------------------ HTML 응답 ------------------------
 char* load_html() {
   FILE* f = fopen("walk.html", "r");
   if (!f) {
-    // 기본(내장) HTML: Yaw 슬라이더 + 회전 NONE + 기존 컨트롤 포함
+    // 기본(내장) HTML: Yaw + Right Arm + 기존 컨트롤
     static const char html[] =
       "HTTP/1.1 200 OK\r\n"
       "Content-Type: text/html\r\n"
@@ -138,6 +149,17 @@ char* load_html() {
       "<small>Tip: 슬라이더를 움직이면 목이 독립적으로 움직입니다 (걷기와 무관).</small>"
       "</div>"
 
+      // [NEW] 오른쪽 팔 컨트롤 섹션
+      "<div class='control-group'>"
+      "<h3>🦾 Right Arm Control</h3>"
+      "<div class='row'>"
+      "<label>Right Arm: <span id='armVal' class='mono'>-</span>°</label>"
+      "<input id='armRange' type='range' min='0' max='180' value='90' oninput='setRightArm(this.value)'/>"
+      "<button class='yaw-btn' onclick=\"setRightArm(90)\">🎯 Reset Arm</button>"
+      "</div>"
+      "<small>Tip: 오른쪽 팔을 목처럼 독립적으로 부드럽게 제어합니다.</small>"
+      "</div>"
+
       "<div class='control-group'>"
       "<h3>💡 LED Control</h3>"
       "<button class='eye-led-btn' onclick=\"sendCommand('eye_led_toggle')\">👁️ Toggle Eye LED</button>"
@@ -172,6 +194,11 @@ char* load_html() {
       "function setYaw(val) {"
       "  document.getElementById('yawVal').textContent = val;"
       "  sendCommand('set_yaw&yaw=' + val);"
+      "}"
+      // [NEW] 오른쪽 팔 JS
+      "function setRightArm(val) {"
+      "  document.getElementById('armVal').textContent = val;"
+      "  sendCommand('set_right_arm&arm=' + val);"
       "}"
       "</script>"
       "</body></html>";
@@ -282,6 +309,16 @@ void* server(void* arg) {
         printf("Set yaw: %.2f deg\n", webYawDeg);
       }
     }
+    // [NEW] ---- 오른쪽 팔 설정 ----
+    else if (strstr(get_line, "command=set_right_arm")) {
+      char *armPos = strstr(get_line, "arm=");
+      if (armPos) {
+        webRightArmDeg = atof(armPos + 4);
+        if (webRightArmDeg < 0.0)   webRightArmDeg = 0.0;
+        if (webRightArmDeg > 180.0) webRightArmDeg = 180.0;
+        printf("Set right arm: %.2f deg\n", webRightArmDeg);
+      }
+    }
     // ---- LED ----
     else if (strstr(get_line, "command=eye_led_toggle")) {
       shouldToggleEyeLed = true;
@@ -308,6 +345,24 @@ void* server(void* arg) {
   return NULL;
 }
 
+// ------------------------ 보조 변환 함수 ------------------------
+// ----- Yaw 변환 (Minecraft 0~360 -> Neck 라디안) -----
+static inline double convertYawToNeckAngle(double yawDeg) {
+  // 로봇 기준 남쪽(180도)을 정면으로 가정
+  double robotBaseYaw = 180.0;
+  double rel = yawDeg - robotBaseYaw;
+  while (rel > 180.0)  rel -= 360.0;
+  while (rel < -180.0) rel += 360.0;
+  // 좌표계 보정: 부호 반전 후 라디안
+  return -rel * M_PI / 180.0;
+}
+
+// [NEW] ----- 웹 각도(0~180) -> 오른팔 라디안 -----
+static inline double convertDegToArmAngle(double armDeg) {
+  // 0도 = 팔 아래, 90도 = 수평, 180도 = 팔 위
+  return (armDeg - 90.0) * M_PI / 180.0;
+}
+
 // ------------------------ Walk 클래스 ------------------------
 Walk::Walk(): Robot() {
   mTimeStep = getBasicTimeStep();
@@ -327,7 +382,7 @@ Walk::Walk(): Robot() {
   for (int i = 0; i < NMOTORS; i++) {
     mMotors[i] = getMotor(motorNames[i]);
     mMotors[i]->enablePosition(mTimeStep);
-    // 위치 한계 (Neck clamp용)
+    // 위치 한계 (Neck/Arm clamp용)
     minMotorPositions[i] = mMotors[i]->getMinPosition();
     maxMotorPositions[i] = mMotors[i]->getMaxPosition();
   }
@@ -415,15 +470,7 @@ void Walk::checkIfFallen() {
 }
 
 // ----- Yaw 변환 (Minecraft 0~360 -> Neck 라디안) -----
-static inline double convertYawToNeckAngle(double yawDeg) {
-  // 로봇 기준 남쪽(180도)을 정면으로 가정
-  double robotBaseYaw = 180.0;
-  double rel = yawDeg - robotBaseYaw;
-  while (rel > 180.0)  rel -= 360.0;
-  while (rel < -180.0) rel += 360.0;
-  // 좌표계 보정: 부호 반전 후 라디안
-  return -rel * M_PI / 180.0;
-}
+// (위에 static inline 함수 구현)
 
 // ------------------------ 메인 루프 ------------------------
 void Walk::run() {
@@ -479,10 +526,33 @@ void Walk::run() {
       filteredYawRad = YAW_FILTER_ALPHA * targetYawRad + (1.0 - YAW_FILTER_ALPHA) * filteredYawRad;
       filteredYawRad = clamp(filteredYawRad, minMotorPositions[NECK_INDEX], maxMotorPositions[NECK_INDEX]);
       mMotors[NECK_INDEX]->setPosition(filteredYawRad);
-      
-      // 목 움직임에 따른 LED 색상 표시
+
+      // 목 움직임에 따른 Eye LED 색상 표시
       if (!blinkMode && eyeLedOn) {
         mEyeLED->set(0x00FFFF); // 시안색 (목 제어 활성)
+      }
+    }
+
+    // [NEW] 3b) 오른쪽 팔 제어 (걷기와 무관하게 항상 동작)
+    bool armMode = (webRightArmDeg >= 0.0);
+    if (armMode) {
+      double target = convertDegToArmAngle(webRightArmDeg);
+      targetArmRad = target;
+      filteredArmRad = ARM_FILTER_ALPHA * targetArmRad + (1.0 - ARM_FILTER_ALPHA) * filteredArmRad;
+
+      // 어깨 관절 제한 적용 후 설정
+      filteredArmRad = clamp(filteredArmRad,
+                             minMotorPositions[SHOULDER_R_INDEX],
+                             maxMotorPositions[SHOULDER_R_INDEX]);
+      mMotors[SHOULDER_R_INDEX]->setPosition(filteredArmRad);
+
+      // (선택) 다관절로 자연스럽게 — 필요 시 주석 해제
+      // mMotors[ARM_UPPER_R_INDEX]->setPosition(filteredArmRad * 0.5); // 상완 절반 각도
+      // mMotors[ARM_LOWER_R_INDEX]->setPosition(filteredArmRad * 0.3); // 하완 30% 각도
+
+      // 팔 제어 표시용 Head LED (걷기 LED와 충돌 최소화: 걷기 정지 시에만 노란색)
+      if (!blinkMode && headLedOn && !isWalking) {
+        mHeadLED->set(0xFFFF00); // 노란색 (팔 제어 활성)
       }
     }
 
@@ -492,7 +562,7 @@ void Walk::run() {
       mGaitManager->setYAmplitude(yAmplitude);
       mGaitManager->setAAmplitude(aAmplitude);
       mGaitManager->step(mTimeStep);
-      
+
       // 걷기 상태에 따른 Head LED 색상
       if (!blinkMode && headLedOn) {
         if (xAmplitude > 0) {
