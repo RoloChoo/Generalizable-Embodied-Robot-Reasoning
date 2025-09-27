@@ -43,7 +43,7 @@ static const char* HTML =
   "<body style='font-family:Arial;padding:24px'>"
   "<h2>DARwIn-OP Control (HTTP)</h2>"
   "<button style='padding:10px 14px;font-weight:700;margin-right:8px' "
-  "onclick=\"fetch('/?blink=toggle').then(()=>location.reload())\">Toggle Blink</button>"
+  "onclick=\"fetch('/?blink=toggle').then(()=>location.reload())\">Toggle Eye Blink</button>"
   "<button style='padding:10px 14px;font-weight:700' "
   "onclick=\"fetch('/?track=toggle').then(()=>location.reload())\">Toggle Tracking</button>"
   "<p>Refresh after clicking to see current state.</p>"
@@ -86,7 +86,7 @@ static void* http_server(void*) {
         pthread_mutex_lock(&g_lock);
         g_blinkMode = !g_blinkMode;
         pthread_mutex_unlock(&g_lock);
-        printf("[HTTP] blink: %s\n", g_blinkMode ? "ON" : "OFF");
+        printf("[HTTP] eye blink: %s\n", g_blinkMode ? "ON" : "OFF");
       } else if (strstr(line, "GET /?track=toggle")) {
         pthread_mutex_lock(&g_lock);
         g_trackMode = !g_trackMode;
@@ -136,7 +136,7 @@ VisualTracking::VisualTracking() : Robot() {
   mEye  = getLED("EyeLed");
   mHead = getLED("HeadLed");
   if (mEye)  mEye->set(0x00FF00); // green
-  if (mHead) mHead->set(0xFF0000); // red
+  if (mHead) mHead->set(0xFF0000); // red - 항상 켜진 상태로 유지
 
   // 비전
   if (mCamera)
@@ -170,7 +170,7 @@ void VisualTracking::run() {
   int height = mCamera ? mCamera->getHeight() : 1;
 
   cout << "---------------Visual Tracking + HTTP---------------" << endl;
-  cout << "GET /?blink=toggle → LED blink, GET /?track=toggle → tracking on/off" << endl;
+  cout << "GET /?blink=toggle → Eye LED blink, GET /?track=toggle → tracking on/off" << endl;
 
   myStep(); // 첫 센서 업데이트
 
@@ -181,20 +181,22 @@ void VisualTracking::run() {
     bool track = g_trackMode;
     pthread_mutex_unlock(&g_lock);
 
-    // 1) LED 블링크 갱신 (0.1s)
+    // 1) 머리 LED는 항상 켜진 상태 유지
+    if (mHead) mHead->set(0xFF0000); // 빨간색으로 항상 켜짐
+    
+    // 2) 눈 LED만 블링크 갱신 (0.1s)
     if (blink) {
       double now = getTime();
       if (now - g_lastBlinkT > 0.1) {
         g_blinkState = !g_blinkState;
         g_lastBlinkT = now;
       }
+      if (mEye) mEye->set(g_blinkState ? 0x00FF00 : 0x000000); // 초록/꺼짐
     } else {
-      g_blinkState = true;
+      if (mEye) mEye->set(0x00FF00); // 깜빡임 모드가 아니면 항상 초록색
     }
-    if (mEye)  mEye->set(g_blinkState ? 0x00FF00 : 0x000000);
-    if (mHead) mHead->set(g_blinkState ? 0xFF0000 : 0x000000);
 
-    // 2) 트래킹이 켜져 있으면 머리 추적
+    // 3) 트래킹이 켜져 있으면 머리 추적
     if (track && mVisionManager && mCamera) {
       double x=0, y=0;
       bool ok = mVisionManager->getBallCenter(x, y, mCamera->getImage());
