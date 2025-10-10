@@ -11,6 +11,8 @@ make clean -f Makefile.darwin-op
 
 
 1.sudo su #this is super admin to uesr
+
+
 2.password : 111111
 3.cd .. # go /darwin not /home/darwin
 4.killall demo
