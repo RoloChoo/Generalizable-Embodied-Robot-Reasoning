@@ -22,6 +22,13 @@ using namespace webots;
 using namespace managers;
 using namespace std;
 
+// ------------------------ 시그널 핸들러 ------------------------
+static void signal_handler(int sig) {
+  (void)sig;  // 사용하지 않는 매개변수 경고 제거
+  printf("\n[EXIT]\n");
+  exit(0);
+}
+
 // ------------------------ 공용 유틸 ------------------------
 static inline double clampd(double v, double lo, double hi) {
   if (lo > hi) { assert(0); return v; }
@@ -49,14 +56,17 @@ static const char* HTML =
   "<p>Refresh after clicking to see current state.</p>"
   "</body></html>";
 
-static void* http_server(void*) {
+static void* http_server(void* arg) {
+  (void)arg;  // 사용하지 않는 매개변수 경고 제거
+  
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) { perror("socket"); return NULL; }
 
   int opt = 1;
   setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-  sockaddr_in addr{};
+  sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port   = htons(8080);
   addr.sin_addr.s_addr = INADDR_ANY;
@@ -70,7 +80,9 @@ static void* http_server(void*) {
   printf("[HTTP] listening on http://0.0.0.0:8080\n");
 
   while (true) {
-    sockaddr_in caddr{}; socklen_t clen = sizeof(caddr);
+    sockaddr_in caddr;
+    memset(&caddr, 0, sizeof(caddr));
+    socklen_t clen = sizeof(caddr);
     int c = accept(s, (sockaddr*)&caddr, &clen);
     if (c < 0) { perror("accept"); continue; }
 
@@ -102,7 +114,6 @@ static void* http_server(void*) {
 }
 
 // ------------------------ 모터/이름/범위 ------------------------
-#define NMOTORS 20
 static double minMotorPositions[NMOTORS];
 static double maxMotorPositions[NMOTORS];
 static const char *motorNames[NMOTORS] = {
@@ -132,18 +143,18 @@ VisualTracking::VisualTracking() : Robot() {
     }
   }
 
-  // LED
-  mEye  = getLED("EyeLed");
-  mHead = getLED("HeadLed");
-  if (mEye)  mEye->set(0x00FF00); // green
-  if (mHead) mHead->set(0xFF0000); // red - 항상 켜진 상태로 유지
+  // LED - 변수명 수정: mEye → mEyeLED, mHead → mHeadLED
+  mEyeLED  = getLED("EyeLed");
+  mHeadLED = getLED("HeadLed");
+  if (mEyeLED)  mEyeLED->set(0x00FF00); // green
+  if (mHeadLED) mHeadLED->set(0xFF0000); // red - 항상 켜진 상태로 유지
 
   // 비전
   if (mCamera)
     mVisionManager = new DARwInOPVisionManager(mCamera->getWidth(), mCamera->getHeight(),
                                                355, 15, 60, 15, 0, 30);
   else
-    mVisionManager = nullptr;
+    mVisionManager = NULL;
 }
 
 VisualTracking::~VisualTracking() {
@@ -156,13 +167,14 @@ void VisualTracking::myStep() {
 }
 
 void VisualTracking::run() {
+  // 시그널 핸들러 등록
+  signal(SIGINT,  signal_handler);
+  signal(SIGTERM, signal_handler);
+
   // HTTP 서버 스레드 시작
   pthread_t th;
   if (pthread_create(&th, NULL, http_server, NULL) != 0)
     printf("Failed to start HTTP server thread\n");
-
-  signal(SIGINT,  [](int){ printf("\n[EXIT]\n"); exit(0); });
-  signal(SIGTERM, [](int){ printf("\n[EXIT]\n"); exit(0); });
 
   double horizontal = 0.0;
   double vertical   = 0.0;
@@ -170,7 +182,7 @@ void VisualTracking::run() {
   int height = mCamera ? mCamera->getHeight() : 1;
 
   cout << "---------------Visual Tracking + HTTP---------------" << endl;
-  cout << "GET /?blink=toggle → Eye LED blink, GET /?track=toggle → tracking on/off" << endl;
+  cout << "GET /?blink=toggle -> Eye LED blink, GET /?track=toggle -> tracking on/off" << endl;
 
   myStep(); // 첫 센서 업데이트
 
@@ -182,7 +194,7 @@ void VisualTracking::run() {
     pthread_mutex_unlock(&g_lock);
 
     // 1) 머리 LED는 항상 켜진 상태 유지
-    if (mHead) mHead->set(0xFF0000); // 빨간색으로 항상 켜짐
+    if (mHeadLED) mHeadLED->set(0xFF0000); // 빨간색으로 항상 켜짐
     
     // 2) 눈 LED만 블링크 갱신 (0.1s)
     if (blink) {
@@ -191,14 +203,15 @@ void VisualTracking::run() {
         g_blinkState = !g_blinkState;
         g_lastBlinkT = now;
       }
-      if (mEye) mEye->set(g_blinkState ? 0x00FF00 : 0x000000); // 초록/꺼짐
+      if (mEyeLED) mEyeLED->set(g_blinkState ? 0x00FF00 : 0x000000); // 초록/꺼짐
     } else {
-      if (mEye) mEye->set(0x00FF00); // 깜빡임 모드가 아니면 항상 초록색
+      if (mEyeLED) mEyeLED->set(0x00FF00); // 깜빡임 모드가 아니면 항상 초록색
     }
 
     // 3) 트래킹이 켜져 있으면 머리 추적
     if (track && mVisionManager && mCamera) {
-      double x=0, y=0;
+      double x = 0.0;
+      double y = 0.0;
       bool ok = mVisionManager->getBallCenter(x, y, mCamera->getImage());
       if (ok) {
         double dh = 0.1 * ((x / width ) - 0.5);
