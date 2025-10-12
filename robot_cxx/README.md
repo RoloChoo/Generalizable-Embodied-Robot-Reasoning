@@ -14,8 +14,14 @@ make clean -f Makefile.darwin-op
 
 
 2.password : 111111
+
+
 3.cd .. # go /darwin not /home/darwin
+
+
 4.killall demo
+
+
 5.cd Linow/project/dxl_montior/
 6. ./dxl_montior
 7.scan
