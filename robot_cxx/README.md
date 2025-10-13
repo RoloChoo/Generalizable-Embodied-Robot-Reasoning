@@ -23,6 +23,9 @@ make clean -f Makefile.darwin-op
 
 
 5.cd Linow/project/dxl_montior/
+
+
+
 6. ./dxl_montior
 7.scan
 8.reset => exit 그리고 로봇 세번째 버튼 누르기
