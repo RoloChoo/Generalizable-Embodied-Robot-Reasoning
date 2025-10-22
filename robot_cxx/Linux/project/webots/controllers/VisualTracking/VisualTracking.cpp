@@ -1,11 +1,27 @@
-// VisualTracking + HTTP server → LED blink, tracking toggle & Motion actions (비동기 개선 - 수정됨)
+// VisualTracking.cpp - OpenCV 2.4.13 + DARwIn-OP (실기기/Webots 겸용)
+// - /camera : 최신 프레임 JPEG 제공
+// - /info   : {"has_image":bool, "size":bytes}
+// - 루트( / ) : 카메라 미리보기 + Controls + 모션 버튼 대시보드
+//
+// 빌드 시 OpenCV 2.4 링크 필요:
+//   ... -lopencv_core -lopencv_imgproc -lopencv_highgui
+//
+// 주의: 모션 페이지(ID)는 장치에 탑재된 모션과 일치해야 합니다.
 
 #include "VisualTracking.hpp"
+
+#include <webots/Robot.hpp>
 #include <webots/Motor.hpp>
 #include <webots/Camera.hpp>
 #include <webots/LED.hpp>
+
 #include <DARwInOPVisionManager.hpp>
 #include <DARwInOPMotionManager.hpp>
+
+// ===== OpenCV 2.4.13 =====
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 #include <pthread.h>
 #include <sys/socket.h>
@@ -16,26 +32,47 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
+#include <vector>
 #include <iostream>
-#include <fstream>
 
 using namespace webots;
 using namespace managers;
 using namespace std;
+using namespace cv;
 
 #define NMOTORS 20
 
-// ------------------------ 시그널 핸들러 ------------------------
+// ------------------------ 공용/시스템 ------------------------
 static void signal_handler(int sig) {
   (void)sig;
   printf("\n[EXIT]\n");
   exit(0);
 }
-
-// ------------------------ 공용 유틸 ------------------------
 static inline double clampd(double v, double lo, double hi) {
-  if (lo > hi) { assert(0); return v; }
+  if (lo > hi) return v;
   return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// ------------------------ 카메라 JPEG 공유 ------------------------
+static pthread_mutex_t g_camera_lock = PTHREAD_MUTEX_INITIALIZER;
+static vector<uchar> g_latest_jpeg;
+static bool g_has_image = false;
+
+static void encodeToJPEG(const unsigned char* image, int width, int height) {
+  if (!image) return;
+  pthread_mutex_lock(&g_camera_lock);
+  try {
+    Mat bgra(height, width, CV_8UC4, const_cast<unsigned char*>(image));
+    Mat bgr;
+    cvtColor(bgra, bgr, CV_BGRA2BGR);
+    vector<int> params; params.push_back(CV_IMWRITE_JPEG_QUALITY); params.push_back(80);
+    imencode(".jpg", bgr, g_latest_jpeg, params);
+    g_has_image = true;
+  } catch (const cv::Exception& e) {
+    fprintf(stderr, "JPEG encode error: %s\n", e.what());
+  }
+  pthread_mutex_unlock(&g_camera_lock);
 }
 
 // ------------------------ HTTP/상태 공유 ------------------------
@@ -45,139 +82,10 @@ static bool   g_trackMode   = true;
 static bool   g_blinkState  = true;
 static double g_lastBlinkT  = 0.0;
 
-// 모션 상태 관리 (타이머 기반)
-static int    g_motionCmd         = 0;
-static double g_motionStartTime   = 0.0;
-static double g_motionDuration    = 0.0;
-static int    g_currentMotion     = 0;
-
-static const char* HTML =
-  "HTTP/1.1 200 OK\r\n"
-  "Content-Type: text/html\r\n"
-  "Connection: close\r\n\r\n"
-  "<!doctype html><html><head><meta charset='utf-8'><title>DARwIn-OP Control</title>"
-  "<style>"
-  "body{font-family:Arial;padding:24px;background:#f5f5f5}"
-  "h2{color:#333}"
-  "button{padding:12px 20px;font-weight:700;margin:8px;border:none;border-radius:4px;cursor:pointer;font-size:14px}"
-  ".green{background:#4CAF50;color:white}"
-  ".blue{background:#2196F3;color:white}"
-  ".orange{background:#FF9800;color:white}"
-  ".red{background:#f44336;color:white}"
-  "button:hover{opacity:0.8}"
-  ".section{margin:20px 0;padding:15px;background:white;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}"
-  ".status{background:#e3f2fd;padding:10px;border-radius:4px;margin:10px 0;font-family:monospace;font-size:12px}"
-  "</style></head>"
-  "<body>"
-  "<h2>🤖 DARwIn-OP Remote Control (Async Mode)</h2>"
-  
-  "<div class='status'>"
-  "✅ <strong>Async Mode:</strong> LED blink and tracking work during motions!"
-  "</div>"
-  
-  "<div class='section'>"
-  "<h3>⚙️ System Control</h3>"
-  "<button class='green' onclick=\"fetch('/?blink=toggle').then(()=>location.reload())\">Toggle Eye Blink</button>"
-  "<button class='green' onclick=\"fetch('/?track=toggle').then(()=>location.reload())\">Toggle Tracking</button>"
-  "</div>"
-  
-  "<div class='section'>"
-  "<h3>👋 Greetings</h3>"
-  "<button class='blue' onclick=\"fetch('/?motion=24').then(()=>alert('Applauding!'))\">Applaud (24)</button>"
-  "<button class='blue' onclick=\"fetch('/?motion=38').then(()=>alert('Waving!'))\">Wave Hand (38)</button>"
-  "<button class='blue' onclick=\"fetch('/?motion=4').then(()=>alert('Hi!'))\">Tilt Hi (4)</button>"
-  "<button class='blue' onclick=\"fetch('/?motion=6').then(()=>alert('Talking!'))\">Talk1 (6)</button>"
-  "<button class='blue' onclick=\"fetch('/?motion=29').then(()=>alert('Talking!'))\">Talk2 (29)</button>"
-  "</div>"
-  
-  "<div class='section'>"
-  "<h3>⚽ Soccer Moves</h3>"
-  "<button class='orange' onclick=\"fetch('/?motion=12').then(()=>alert('Right Kick!'))\">Right Kick (12)</button>"
-  "<button class='orange' onclick=\"fetch('/?motion=13').then(()=>alert('Left Kick!'))\">Left Kick (13)</button>"
-  "<button class='orange' onclick=\"fetch('/?motion=70').then(()=>alert('Right Pass!'))\">Right Pass (70)</button>"
-  "<button class='orange' onclick=\"fetch('/?motion=71').then(()=>alert('Left Pass!'))\">Left Pass (71)</button>"
-  "</div>"
-  
-  "<div class='section'>"
-  "<h3>🎭 Expressions</h3>"
-  "<button class='red' onclick=\"fetch('/?motion=2').then(()=>alert('Nodding!'))\">Nod Yes (2)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=3').then(()=>alert('Shaking head!'))\">Shake No (3)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=23').then(()=>alert('Arm Yes!'))\">Arm Yes (23)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=27').then(()=>alert('Arm+Head Yes!'))\">Arm+Head Yes (27)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=31').then(()=>alert('Stretching!'))\">Stretch (31)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=237').then(()=>alert('Jumping!'))\">Jump (237)</button>"
-  "<button class='red' onclick=\"fetch('/?motion=239').then(()=>alert('Quick Jump!'))\">Quick Jump (239)</button>"
-  "</div>"
-  
-  "<p style='color:#666;margin-top:20px'>💡 Now you can blink eyes while performing actions!</p>"
-  "</body></html>";
-
-static void* http_server(void* arg) {
-  (void)arg;
-  
-  int s = socket(AF_INET, SOCK_STREAM, 0);
-  if (s < 0) { perror("socket"); return NULL; }
-
-  int opt = 1;
-  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-  sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port   = htons(8080);
-  addr.sin_addr.s_addr = INADDR_ANY;
-
-  if (bind(s, (sockaddr*)&addr, sizeof(addr)) < 0) {
-    perror("bind"); close(s); return NULL;
-  }
-  if (listen(s, 8) < 0) {
-    perror("listen"); close(s); return NULL;
-  }
-  printf("[HTTP] listening on http://0.0.0.0:8080\n");
-
-  while (true) {
-    sockaddr_in caddr;
-    memset(&caddr, 0, sizeof(caddr));
-    socklen_t clen = sizeof(caddr);
-    int c = accept(s, (sockaddr*)&caddr, &clen);
-    if (c < 0) { perror("accept"); continue; }
-
-    char buf[1024];
-    ssize_t n = recv(c, buf, sizeof(buf)-1, 0);
-    if (n <= 0) { close(c); continue; }
-    buf[n] = '\0';
-
-    char* line = strtok(buf, "\r\n");
-    if (line) {
-      if (strstr(line, "GET /?blink=toggle")) {
-        pthread_mutex_lock(&g_lock);
-        g_blinkMode = !g_blinkMode;
-        pthread_mutex_unlock(&g_lock);
-        printf("[HTTP] eye blink: %s\n", g_blinkMode ? "ON" : "OFF");
-      } 
-      else if (strstr(line, "GET /?track=toggle")) {
-        pthread_mutex_lock(&g_lock);
-        g_trackMode = !g_trackMode;
-        pthread_mutex_unlock(&g_lock);
-        printf("[HTTP] track: %s\n", g_trackMode ? "ON" : "OFF");
-      }
-      else if (strstr(line, "GET /?motion=")) {
-        char* p = strstr(line, "motion=");
-        if (p) {
-          int page = atoi(p + 7);
-          pthread_mutex_lock(&g_lock);
-          g_motionCmd = page;
-          pthread_mutex_unlock(&g_lock);
-          printf("[HTTP] motion request: page %d\n", page);
-        }
-      }
-    }
-
-    send(c, HTML, strlen(HTML), 0);
-    close(c);
-  }
-  return NULL;
-}
+static int    g_motionCmd         = 0;     // 새로 요청된 모션
+static double g_motionStartTime   = 0.0;   // 현재 재생 시작 시각
+static double g_motionDuration    = 0.0;   // 모션 예상 지속 시간
+static int    g_currentMotion     = 0;     // 현재 재생중인 모션
 
 // ------------------------ 모터/이름/범위 ------------------------
 static double minMotorPositions[NMOTORS];
@@ -190,36 +98,230 @@ static const char *motorNames[NMOTORS] = {
   "FootR","FootL","Neck","Head"
 };
 
-// 모션별 대략적인 재생 시간 (초) - 실제 모션 파일에 맞게 조정 필요
+// ------------------------ 모션 길이 테이블 ------------------------
+// (장치에 로드된 페이지와 일치해야 함. 필요시 값 조정)
 static double getMotionDuration(int page) {
   switch(page) {
-    case 1:   return 2.0;  // Standing up
-    case 2:   return 2.0;  // Nod
-    case 3:   return 2.0;  // Shake
-    case 4:   return 2.0;  // Tilt Hi
-    case 6:   return 3.0;  // Talk1
-    case 12:  return 3.0;  // Right Kick
-    case 13:  return 3.0;  // Left Kick
-    case 23:  return 2.5;  // Arm Yes
-    case 24:  return 3.0;  // Applaud
-    case 27:  return 2.5;  // Arm+Head Yes
-    case 29:  return 3.0;  // Talk2
-    case 31:  return 3.0;  // Stretch
-    case 38:  return 2.5;  // Wave
-    case 70:  return 3.0;  // Right Pass
-    case 71:  return 3.0;  // Left Pass
-    case 237: return 2.0;  // Jump
-    case 239: return 1.5;  // Quick Jump
-    default:  return 3.0;  // 기본값
+    case 1:  return 2.0;   // ini / stand
+    case 2:  return 2.0;   // OK / nod yes
+    case 3:  return 2.0;   // no / shake head
+    case 4:  return 2.0;   // hi / tilt
+    case 6:  return 3.0;   // talk1
+    case 9:  return 2.5;   // walkready
+    case 10: return 3.0;   // f up (lying face → up)
+    case 11: return 3.0;   // b up (lying back → up)
+    case 12: return 3.0;   // rk
+    case 13: return 3.0;   // lk
+    case 15: return 2.0;   // sit down
+    case 16: return 2.0;   // stand up
+    case 23: return 2.5;   // d1 / arm yes
+    case 24: return 3.0;   // d2 / applaud
+    case 27: return 2.5;   // d3 / arm+head yes
+    case 29: return 3.0;   // talk2
+    case 31: return 3.0;   // d4 / stretch
+    case 38: return 2.5;   // wave hand
+    case 54: return 3.0;   // int (applaud louder?) - 환경에 맞게
+    case 57: return 3.0;   // int (applaud?)        - 환경에 맞게
+    case 70: return 3.0;   // rPASS
+    case 71: return 3.0;   // lPASS
+    case 90: return 3.0;   // lie down (front)
+    case 91: return 3.0;   // lie up (back)
+    default: return 3.0;
   }
+}
+
+// ------------------------ HTML (카메라 + 컨트롤 + 표 기반 버튼) ------------------------
+static const char* HTML =
+"HTTP/1.1 200 OK\r\nContent-Type:text/html\r\nConnection:close\r\n\r\n"
+"<!doctype html><html><head><meta charset='utf-8'>"
+"<title>DARwIn-OP Camera & Controls</title>"
+"<style>"
+"body{font-family:Arial;padding:20px;background:#f5f5f5}"
+"h2{color:#333;margin:0 0 10px}"
+".wrap{max-width:980px;margin:0 auto}"
+".card{background:#fff;border-radius:10px;padding:16px;margin:14px 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}"
+".row{display:flex;flex-wrap:wrap;gap:8px}"
+"button{padding:10px 14px;border:none;border-radius:6px;cursor:pointer;font-size:13px}"
+".g{background:#4CAF50;color:#fff}.b{background:#2196F3;color:#fff}"
+".o{background:#FF9800;color:#fff}.r{background:#f44336;color:#fff}"
+".cam{max-width:640px;width:100%;border:2px solid #333;border-radius:8px;display:block;margin:0 auto}"
+".kv{font-family:monospace;background:#eef;border-radius:6px;padding:8px;display:inline-block}"
+"</style>"
+"<script>"
+"function tick(){var img=document.getElementById('cam'); if(img){img.src='/camera?t='+Date.now();}}"
+"setInterval(tick,150);"
+"function go(page){fetch('/?motion='+page)}"
+"</script></head><body><div class='wrap'>"
+
+"<div class='card'>"
+"<h2>📷 Camera</h2>"
+"<img id='cam' class='cam' src='/camera'>"
+"<div style='margin-top:8px'>Info API: <span class='kv'>GET /info</span></div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>⚙️ Controls</h2>"
+"<div class='row'>"
+"<button class='g' onclick=\"fetch('/?blink=toggle')\">Toggle Blink</button>"
+"<button class='g' onclick=\"fetch('/?track=toggle')\">Toggle Tracking</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>🙋 Basics</h2>"
+"<div class='row'>"
+"<button class='b' onclick='go(1)'>ini (1)</button>"
+"<button class='b' onclick='go(2)'>OK / Nod (2)</button>"
+"<button class='b' onclick='go(3)'>no / Shake (3)</button>"
+"<button class='b' onclick='go(4)'>hi / Tilt (4)</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>🗣️ Talk / Prep</h2>"
+"<div class='row'>"
+"<button class='o' onclick='go(6)'>talk1 (6)</button>"
+"<button class='o' onclick='go(29)'>talk2 (29)</button>"
+"<button class='o' onclick='go(9)'>walkready (9)</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>↕️ Get up / Sit / Stand</h2>"
+"<div class='row'>"
+"<button class='r' onclick='go(10)'>f up (10)</button>"
+"<button class='r' onclick='go(11)'>b up (11)</button>"
+"<button class='r' onclick='go(15)'>sit down (15)</button>"
+"<button class='r' onclick='go(16)'>stand up (16)</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>🎭 Gestures</h2>"
+"<div class='row'>"
+"<button class='b' onclick='go(23)'>d1 / Arm YES (23)</button>"
+"<button class='b' onclick='go(24)'>d2 / Applaud (24)</button>"
+"<button class='b' onclick='go(27)'>d3 / Arm+Head YES (27)</button>"
+"<button class='b' onclick='go(31)'>d4 / Stretch (31)</button>"
+"<button class='b' onclick='go(38)'>Wave hand (38)</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>⚽ Soccer</h2>"
+"<div class='row'>"
+"<button class='o' onclick='go(12)'>rk / Right kick (12)</button>"
+"<button class='o' onclick='go(13)'>lk / Left kick (13)</button>"
+"<button class='o' onclick='go(70)'>rPASS (70)</button>"
+"<button class='o' onclick='go(71)'>lPASS (71)</button>"
+"</div>"
+"</div>"
+
+"<div class='card'>"
+"<h2>🛌 Lie</h2>"
+"<div class='row'>"
+"<button class='g' onclick='go(90)'>lie down (front) (90)</button>"
+"<button class='g' onclick='go(91)'>lie up (back) (91)</button>"
+"</div>"
+"</div>"
+
+"</div></body></html>";
+
+// ------------------------ HTTP 서버 ------------------------
+static void* http_server(void* arg) {
+  (void)arg;
+
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s < 0) { perror("socket"); return NULL; }
+
+  int opt = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  sockaddr_in addr; memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port   = htons(8080);
+  addr.sin_addr.s_addr = INADDR_ANY;
+
+  if (bind(s, (sockaddr*)&addr, sizeof(addr)) < 0) { perror("bind"); close(s); return NULL; }
+  if (listen(s, 8) < 0) { perror("listen"); close(s); return NULL; }
+  printf("[HTTP] listening on http://0.0.0.0:8080\n");
+
+  while (true) {
+    sockaddr_in caddr; socklen_t clen = sizeof(caddr);
+    int c = accept(s, (sockaddr*)&caddr, &clen);
+    if (c < 0) { perror("accept"); continue; }
+
+    char buf[1024]; ssize_t n = recv(c, buf, sizeof(buf)-1, 0);
+    if (n <= 0) { close(c); continue; }
+    buf[n] = '\0';
+
+    char* line = strtok(buf, "\r\n");
+    if (!line) { close(c); continue; }
+
+    // ---- 라우팅 ----
+    if (strstr(line, "GET /camera")) {
+      pthread_mutex_lock(&g_camera_lock);
+      if (g_has_image && !g_latest_jpeg.empty()) {
+        char header[256];
+        snprintf(header, sizeof(header),
+          "HTTP/1.1 200 OK\r\nContent-Type:image/jpeg\r\n"
+          "Content-Length:%zu\r\nAccess-Control-Allow-Origin:*\r\n\r\n",
+          g_latest_jpeg.size());
+        send(c, header, strlen(header), 0);
+        send(c, &g_latest_jpeg[0], g_latest_jpeg.size(), 0);
+      } else {
+        const char* err = "HTTP/1.1 503 Service Unavailable\r\n\r\nNo image";
+        send(c, err, strlen(err), 0);
+      }
+      pthread_mutex_unlock(&g_camera_lock);
+      close(c);
+      continue;
+    }
+    else if (strstr(line, "GET /info")) {
+      char info[256];
+      pthread_mutex_lock(&g_camera_lock);
+      size_t sz = g_latest_jpeg.size();
+      bool has = g_has_image;
+      pthread_mutex_unlock(&g_camera_lock);
+      snprintf(info, sizeof(info),
+        "HTTP/1.1 200 OK\r\nContent-Type:application/json\r\n\r\n"
+        "{\"has_image\":%s,\"size\":%zu}", has ? "true" : "false", sz);
+      send(c, info, strlen(info), 0);
+      close(c);
+      continue;
+    }
+    else if (strstr(line, "GET /?blink=toggle")) {
+      pthread_mutex_lock(&g_lock); g_blinkMode = !g_blinkMode; pthread_mutex_unlock(&g_lock);
+      printf("[HTTP] eye blink: %s\n", g_blinkMode ? "ON" : "OFF");
+    }
+    else if (strstr(line, "GET /?track=toggle")) {
+      pthread_mutex_lock(&g_lock); g_trackMode = !g_trackMode; pthread_mutex_unlock(&g_lock);
+      printf("[HTTP] track: %s\n", g_trackMode ? "ON" : "OFF");
+    }
+    else if (strstr(line, "GET /?motion=")) {
+      char* p = strstr(line, "motion=");
+      if (p) {
+        int page = atoi(p + 7);
+        pthread_mutex_lock(&g_lock); g_motionCmd = page; pthread_mutex_unlock(&g_lock);
+        printf("[HTTP] motion request: page %d\n", page);
+      }
+    }
+
+    // 기본: 대시보드 HTML
+    send(c, HTML, strlen(HTML), 0);
+    close(c);
+  }
+
+  return NULL;
 }
 
 // ------------------------ VisualTracking 구현 ------------------------
 VisualTracking::VisualTracking() : Robot() {
   mTimeStep = getBasicTimeStep();
+  if (mTimeStep <= 0) mTimeStep = 8; // 실기기 0 보정
 
   mCamera = getCamera("Camera");
-  if (mCamera) mCamera->enable(2*mTimeStep);
+  if (mCamera) mCamera->enable(2 * mTimeStep);
 
   for (int i=0; i<NMOTORS; i++) {
     mMotors[i] = getMotor(motorNames[i]);
@@ -242,7 +344,7 @@ VisualTracking::VisualTracking() : Robot() {
                                                355, 15, 60, 15, 0, 30);
   else
     mVisionManager = NULL;
-    
+
   mMotionManager = new DARwInOPMotionManager(this);
 }
 
@@ -252,17 +354,14 @@ VisualTracking::~VisualTracking() {
 }
 
 void VisualTracking::myStep() {
-  // ✅ step() 메소드 호출 제거 - 존재하지 않음
-  // Robot::step()만으로 모션이 자동으로 진행됨
   int ret = step(mTimeStep);
   if (ret == -1) exit(EXIT_SUCCESS);
 }
 
 void VisualTracking::wait(int ms) {
-  double startTime = getTime();
-  double s = (double) ms / 1000.0;
-  while (s + startTime >= getTime())
-    myStep();
+  double start = getTime();
+  double s = ms / 1000.0;
+  while (s + start >= getTime()) myStep();
 }
 
 void VisualTracking::run() {
@@ -278,99 +377,95 @@ void VisualTracking::run() {
   int width  = mCamera ? mCamera->getWidth()  : 1;
   int height = mCamera ? mCamera->getHeight() : 1;
 
-  cout << "---------------Visual Tracking + HTTP + Async Motions---------------" << endl;
-  cout << "Open browser: http://<robot-ip>:8080" << endl;
-  cout << "✨ NEW: LED blink and tracking work during motions!" << endl;
+  cout << "--------------- Visual Tracking + HTTP + Async Motions ---------------\n";
+  cout << "Open: http://<robot-ip>:8080\n";
 
-  // 초기 자세 - Standing up 상태로 시작 (비동기 재생)
+  // 초기 자세 (ini / stand)
   mMotionManager->playPage(1, false);
   g_motionStartTime = getTime();
-  g_motionDuration = getMotionDuration(1);
-  g_currentMotion = 1;
-  wait(500);
+  g_motionDuration  = getMotionDuration(1);
+  g_currentMotion   = 1;
+  wait(300);
 
   myStep();
 
   while (true) {
-    double currentTime = getTime();
+    double now = getTime();
 
-    // === 1. 상태 및 명령 읽기 ===
+    // 0) 카메라 프레임 → JPEG 업데이트
+    if (mCamera) {
+      const unsigned char* img = mCamera->getImage();
+      if (img) encodeToJPEG(img, width, height);
+    }
+
+    // 1) 상태/명령 스냅샷
     pthread_mutex_lock(&g_lock);
     bool blink = g_blinkMode;
     bool track = g_trackMode;
-    int motionPage = g_motionCmd;
+    int  req   = g_motionCmd;
     g_motionCmd = 0;
     pthread_mutex_unlock(&g_lock);
 
-    // === 2. 모션 재생 상태 체크 (타이머 기반) ===
-    bool isPlaying = (currentTime - g_motionStartTime) < g_motionDuration;
+    // 2) 모션 재생 상태
+    bool isPlaying = (now - g_motionStartTime) < g_motionDuration;
 
-    // === 3. 모션 시작 (새 명령이 있고 현재 재생 중이 아닐 때) ===
-    if (motionPage > 0 && !isPlaying) {
-      cout << "▶️ Playing motion page: " << motionPage << " (async)" << endl;
-      mMotionManager->playPage(motionPage, false);
-      g_motionStartTime = currentTime;
-      g_motionDuration = getMotionDuration(motionPage);
-      g_currentMotion = motionPage;
+    // 3) 새 모션 시작
+    if (req > 0 && !isPlaying) {
+      cout << "▶️ Motion page: " << req << " (async)\n";
+      mMotionManager->playPage(req, false);
+      g_motionStartTime = now;
+      g_motionDuration  = getMotionDuration(req);
+      g_currentMotion   = req;
     }
 
-    // === 4. 머리 LED 항상 켜짐 ===
+    // 4) 머리 LED 고정
     if (mHeadLED) mHeadLED->set(0xFF0000);
 
-    // === 5. 눈 LED 블링크 (모션 중에도 계속 작동) ===
+    // 5) 눈 LED 블링크
     if (blink) {
-      if (currentTime - g_lastBlinkT > 0.1) {
-        g_blinkState = !g_blinkState;
-        g_lastBlinkT = currentTime;
-      }
+      if (now - g_lastBlinkT > 0.1) { g_blinkState = !g_blinkState; g_lastBlinkT = now; }
       if (mEyeLED) mEyeLED->set(g_blinkState ? 0x00FF00 : 0x000000);
     } else {
       if (mEyeLED) mEyeLED->set(0x00FF00);
     }
 
-    // === 6. 트래킹 (모션 중에도 계속 작동) ===
+    // 6) 트래킹 (모션 중에도 동작)
     if (track && mVisionManager && mCamera) {
-      double x = 0.0, y = 0.0;
+      double x=0.0, y=0.0;
       bool ok = mVisionManager->getBallCenter(x, y, mCamera->getImage());
       if (ok) {
         double dh = 0.1 * ((x / width ) - 0.5);
         double dv = 0.1 * ((y / height) - 0.5);
         horizontal -= dh;
         vertical   -= dv;
-
         horizontal = clampd(horizontal, minMotorPositions[18], maxMotorPositions[18]);
         vertical   = clampd(vertical,   minMotorPositions[19], maxMotorPositions[19]);
-
         if (mMotors[18]) mMotors[18]->setPosition(horizontal);
         if (mMotors[19]) mMotors[19]->setPosition(vertical);
       }
     }
 
-    // === 7. 시뮬레이터 틱 ===
+    // 7) 시뮬레이터 틱
     myStep();
 
-    // === 8. 모션 종료 체크 및 Standing 복귀 ===
+    // 8) 모션 종료 → ini 복귀
     bool wasPlaying = isPlaying;
-    isPlaying = (currentTime - g_motionStartTime) < g_motionDuration;
-
+    isPlaying = (now - g_motionStartTime) < g_motionDuration;
     if (wasPlaying && !isPlaying && g_currentMotion != 0) {
-      int finished = g_currentMotion;
-      g_currentMotion = 0;
-      
-      cout << "⏹️ Motion " << finished << " completed" << endl;
-
-      // standing 자세로 복귀 (1번 제외)
+      int finished = g_currentMotion; g_currentMotion = 0;
+      cout << "⏹️ Motion " << finished << " completed\n";
       if (finished != 1) {
         mMotionManager->playPage(1, false);
-        g_motionStartTime = currentTime;
-        g_motionDuration = getMotionDuration(1);
-        g_currentMotion = 1;
+        g_motionStartTime = now;
+        g_motionDuration  = getMotionDuration(1);
+        g_currentMotion   = 1;
         wait(200);
       }
     }
   }
 }
 
+// ------------------------ main ------------------------
 int main() {
   VisualTracking c;
   c.run();
