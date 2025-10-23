@@ -1,1 +1,55 @@
-include ../Makefile.include
+###############################################################
+# DARwIn-OP (real robot) + OpenCV 2.4.13 + C++98
+###############################################################
+
+TARGET = $(shell basename $(CURDIR))
+
+DARWINOP_ROOT = /darwin
+WEBOTS_DARWINOP_PROJECT_ROOT = /darwin/Linux/project/webots
+
+CXX_SOURCES = $(wildcard *.cpp)
+OBJECTS     = $(CXX_SOURCES:.cpp=.o)
+
+# --- 헤더 경로 ---
+CXXFLAGS += -O2 -std=c++98 -DLINUX -DCROSSCOMPILATION -Wall
+CXXFLAGS += -I$(DARWINOP_ROOT)/Linux/include \
+            -I$(DARWINOP_ROOT)/Framework/include \
+            -I$(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/include \
+            -I$(WEBOTS_DARWINOP_PROJECT_ROOT)/include \
+            -I/usr/local/include -I/usr/local/include/opencv
+
+# --- 링크 라이브러리 ---
+# (⚠️ -lX11 제거됨 — wrapper.a에 이미 libX11.so 포함)
+LFLAGS   += -L/usr/local/lib \
+            -lopencv_core -lopencv_imgproc -lopencv_highgui \
+            -lpthread -ljpeg -lrt \
+            -Wl,-rpath,/usr/local/lib
+
+WRAPPER  = $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/lib/wrapper.a \
+           $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/keyboard/keyboard.a \
+           /usr/lib/libX11.so.6
+
+DARWINOP_STATIC_LIBRARY = $(DARWINOP_ROOT)/Linux/lib/darwin.a
+MANAGERS_STATIC_LIBRARY = $(WEBOTS_DARWINOP_PROJECT_ROOT)/lib/managers.a
+
+all: $(TARGET)
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+
+$(WRAPPER):
+	$(MAKE) -C $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/lib
+
+$(DARWINOP_STATIC_LIBRARY):
+	$(MAKE) -C $(DARWINOP_ROOT)/Linux/build
+
+# ---- 링크 순서 중요 ----
+# OBJECTS → WRAPPER → DARWIN/MANAGERS → OpenCV 등
+$(TARGET): $(WRAPPER) $(OBJECTS) $(DARWINOP_STATIC_LIBRARY)
+	$(CXX) $(CXXFLAGS) $(OBJECTS) \
+		$(WRAPPER) \
+		$(DARWINOP_STATIC_LIBRARY) \
+		$(MANAGERS_STATIC_LIBRARY) \
+		$(LFLAGS) \
+		-o $(TARGET)
+	chmod 755 $(TARGET)
