@@ -61,3 +61,18 @@ bashsudo dhclient -r  # 현재 IP 해제
 
 
 sudo dhclient     # 새 IP 받기
+
+
+
+/darwin/Linux/projext/webots/transfer/keyboard &
+/darwin/Linux/projext/webots/transfer/transfer &
+
+
+
+
+크래쉬 났을 때
+mount -o remount.rw /
+
+
+exit
+
