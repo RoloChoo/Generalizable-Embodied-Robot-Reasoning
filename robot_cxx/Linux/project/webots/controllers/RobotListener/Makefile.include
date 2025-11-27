@@ -1,0 +1,73 @@
+###############################################################
+#
+# Purpose:  Makefile for compiling a controller using the Webots
+#           API on the darwin-op real robot
+# Author :  fabien.rohrer@cyberbotics.com
+# License:  GPL
+# Date   :  September 2013
+#
+###############################################################
+
+# name of the binary to generate
+TARGET = $(shell basename $(CURDIR))
+
+# paths
+DARWINOP_ROOT = /darwin
+WEBOTS_DARWINOP_PROJECT_ROOT = /darwin/Linux/project/webots
+
+# sources / objects
+CXX_SOURCES = $(wildcard *.cpp)
+OBJECTS = $(CXX_SOURCES:.cpp=.o)
+
+# ------------ OpenCV (우선 pkg-config, 없으면 경로 고정) ------------
+OPENCV_CFLAGS := $(shell pkg-config --cflags opencv 2>/dev/null)
+OPENCV_LIBS   := $(shell pkg-config --libs   opencv 2>/dev/null)
+
+ifeq ($(strip $(OPENCV_CFLAGS)),)
+  # pkg-config 없음 → 일반 경로 사용 (OpenCV 2.4.13 기준)
+  OPENCV_CFLAGS := -I/usr/local/include -I/usr/local/include/opencv
+  OPENCV_LIBS   := -L/usr/local/lib -lopencv_core -lopencv_imgproc -lopencv_highgui
+endif
+# -------------------------------------------------------------------
+
+# include dirs
+INCLUDE_DIRS = \
+  -I$(DARWINOP_ROOT)/Linux/include \
+  -I$(DARWINOP_ROOT)/Framework/include \
+  -I$(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/include \
+  -I$(WEBOTS_DARWINOP_PROJECT_ROOT)/include
+
+CXX = g++
+
+# ⚠️ C++98 추가 + OpenCV 헤더 추가
+CXXFLAGS += -O2 -std=c++98 -DLINUX -DCROSSCOMPILATION -Wall $(INCLUDE_DIRS) $(OPENCV_CFLAGS)
+
+# non-OpenCV libs
+LFLAGS += -lpthread -ljpeg -lrt
+
+WRAPPER = \
+  $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/lib/wrapper.a \
+  $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/keyboard/keyboard.a \
+  /usr/lib/libX11.so.6
+
+DARWINOP_STATIC_LIBRARY = $(DARWINOP_ROOT)/Linux/lib/darwin.a
+MANAGERS_STATIC_LIBRARY = $(WEBOTS_DARWINOP_PROJECT_ROOT)/lib/managers.a
+
+all: $(TARGET)
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+
+$(WRAPPER):
+	$(MAKE) -C $(WEBOTS_DARWINOP_PROJECT_ROOT)/transfer/lib
+
+$(DARWINOP_STATIC_LIBRARY):
+	$(MAKE) -C $(DARWINOP_ROOT)/Linux/build
+
+# 🔴 링크 순서 중요: objects → wrapper/darwin/managers → OpenCV → LFLAGS
+$(TARGET): $(WRAPPER) $(OBJECTS) $(DARWINOP_STATIC_LIBRARY)
+	$(CXX) $(CXXFLAGS) $(OBJECTS) \
+		$(WRAPPER) $(DARWINOP_STATIC_LIBRARY) $(MANAGERS_STATIC_LIBRARY) \
+		$(OPENCV_LIBS) $(LFLAGS) \
+		-o $(TARGET)
+	chmod 755 $(TARGET)
