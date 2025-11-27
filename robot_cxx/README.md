@@ -65,6 +65,7 @@ sudo dhclient     # 새 IP 받기
 
 
 /darwin/Linux/projext/webots/transfer/keyboard &
+
 /darwin/Linux/projext/webots/transfer/transfer &
 
 
