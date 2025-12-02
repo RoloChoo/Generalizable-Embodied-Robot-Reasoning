@@ -1,0 +1,32 @@
+[
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕 너는 뭘 잘하니",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 갑자기 뭘 잘하냐고? 나는 로봇이니까 뭐든 할 수 있어. !robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "No response from Claude.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  한번 잘하는 거 해 봐",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "쳇, 명령하는 거야? 뭐... 나무라도 잘라볼까. !collectBlocks",
+        "imagePath": null
+    }
+]

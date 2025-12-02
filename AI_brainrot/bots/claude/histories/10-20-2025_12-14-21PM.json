@@ -1,0 +1,82 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 시스템이 뭐래는 거야? !robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  좋은 클로드.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotStretch",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  지금 뭐하러",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotStretch",
+        "imagePath": null
+    }
+]

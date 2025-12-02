@@ -1,0 +1,32 @@
+[
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕",
+        "imagePath": "robot_1761408417309.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 또 왔네? !robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\nLED 깜빡이면서 기다리고 있었어.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  나 보여?",
+        "imagePath": "robot_1761408417309.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "어? 센서로 감지 안 되는데. !entities",
+        "imagePath": null
+    }
+]

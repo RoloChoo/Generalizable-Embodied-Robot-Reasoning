@@ -1,0 +1,117 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 왜 갑자기 시스템 얘기야? !robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕 혹시 할 이야기 없어",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭐야 갑자기. !robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotStretch",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "뭐... 할 말이야 있지. !robotTalk2",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotYes",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotStretch",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotYes",
+        "imagePath": null
+    }
+]

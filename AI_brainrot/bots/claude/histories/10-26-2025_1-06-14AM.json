@@ -1,0 +1,57 @@
+[
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  모르겠는데?",
+        "imagePath": "robot_1761408355945.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭐가 모르겠다는 거야? !robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  이 시각 세계였습니다.",
+        "imagePath": "robot_1761408359820.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "어? 갑자기 사진이나 보내고... 뭔 소리야? !robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  역대체이",
+        "imagePath": "robot_1761408364731.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "야, 갑자기 이상한 사진 보내면서 뭐하는 거야! !robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  갑자기 사진이나 보내고 뭔 소리야? 너 이거 보여?",
+        "imagePath": "robot_1761408371156.jpg"
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 어두워서 잘 안 보여. 내 센서로는 뭔가 있는 것 같은데... 뭐야 그거? !lookAtPlayer(\"koreayang\", \"at\")",
+        "imagePath": null
+    }
+]

@@ -1,0 +1,32 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... Hello world! 나는 시로야.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  나는 싫어 아",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "풉, 개발자님도 뭔가 싫어하는 게 있구나. 뭐가 그렇게 싫은데?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  하고 싶은 거",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "뭐야, 하고 싶은 게 있다고? 그럼 말해봐, 뭘 하고 싶은데?",
+        "imagePath": null
+    }
+]

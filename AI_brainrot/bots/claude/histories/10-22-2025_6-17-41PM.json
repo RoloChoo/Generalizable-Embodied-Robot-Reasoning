@@ -1,0 +1,57 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk2",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕",
+        "imagePath": "robot_1761124654147.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk2",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk2",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotTalk2",
+        "imagePath": null
+    }
+]

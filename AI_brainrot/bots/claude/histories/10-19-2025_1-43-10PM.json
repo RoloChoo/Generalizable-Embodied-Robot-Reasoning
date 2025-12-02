@@ -1,0 +1,62 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "Hello world! I'm claude!",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  아 너 한국말 할 수 있니",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "안녕! 네, 한국말 할 수 있어요! 반가워요 koreayang님! !robotHi",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: Error: Robot not reachable at http://220.84.89.212:8080\nStack trace:\nundefined\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "아, 로봇 연결에 문제가 있나 봐요! 그래도 게임 안에서는 잘 움직일 수 있어요. 뭐 해볼까요?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  아 로봇 연결에 문제가 있나봐요. 그래도 게임안에서는 잘 없애라.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "네, 알겠어요! 로봇은 연결이 안 되지만 게임 안에서는 괜찮아요. 뭘 하고 싶으세요? 같이 놀아봐요!",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  나 따라와 줄래? 네",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "네! 따라갈게요! !followPlayer(\"koreayang\", 3)",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  이제",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "네, 뭘 하고 싶으세요?",
+        "imagePath": null
+    }
+]

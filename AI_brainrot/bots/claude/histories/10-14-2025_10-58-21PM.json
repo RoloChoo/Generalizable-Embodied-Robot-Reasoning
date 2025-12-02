@@ -1,0 +1,52 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "Hello world! I'm claude.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang] Can you make wave hand?",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "Sure! !robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang] Can you see?",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "Yeah, I can see! I can see blocks, players, and everything around me in the world.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang] Can you kick right?",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "!robotKickRight",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    }
+]

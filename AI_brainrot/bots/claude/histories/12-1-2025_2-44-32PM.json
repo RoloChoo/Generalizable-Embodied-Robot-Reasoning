@@ -1,0 +1,32 @@
+[
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  저기 있는",
+        "imagePath": "robot_1764567818599.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭘 가리키는 건데? 센서로 봐도 잘 안 보이잖아.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  저기 있는 키보드를 잡아",
+        "imagePath": "robot_1764567842410.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 키보드? 내가 로봇이라고 뭐든 다 집을 수 있는 줄 알아? \n\n그런데... 저기 검은색 키보드 말하는 거야?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  아 집을 수 있는 줄 알아 맞아 저기 있는 검은색 키보드",
+        "imagePath": "robot_1764567860719.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "!pickupItem('keyboard')",
+        "imagePath": null
+    }
+]

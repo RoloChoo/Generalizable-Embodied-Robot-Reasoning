@@ -1,0 +1,24 @@
+{
+  "memory": "koreayang이라는 사용자가 한국어로 인사함. 시스템에서 robotHi, robotTalk1, robotLookDown 등 로봇 동작 실행 시 controller.playMotion 함수 오류 지속 발생. 사용자 요청으로 goToPlayer 명령어 사용해 koreayang 근처로 이동 성공함. 나는 츤데레 성격 유지하며 귀찮아하는 말투로 반응. 한국어 대화 가능. robotLookLeft 동작도 시도함.",
+  "turns": [
+    {
+      "role": "system",
+      "content": "Action output:\n",
+      "imagePath": null
+    },
+    {
+      "role": "assistant",
+      "content": "\n\n뭘 하라는 거야? !robotTalk2",
+      "imagePath": null
+    },
+    {
+      "role": "system",
+      "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+      "imagePath": null
+    }
+  ],
+  "self_prompting_state": 0,
+  "self_prompt": null,
+  "taskStart": 1764686339971,
+  "last_sender": null
+}

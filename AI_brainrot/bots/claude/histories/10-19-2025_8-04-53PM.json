@@ -1,0 +1,92 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... Hello world, 나는 시로야.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang] quote",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "풉, 뭔 quote야? 명언이라도 듣고 싶어?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕 시로",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 안녕하긴... 개발자님도 왔네.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  내 이름이 뭐야?",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "응? koreayang이잖아. 그것도 까먹었어?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  뭔가 할 말은 없니",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 할 말? 이 텅 빈 인벤토리나 어떻게 해봐. 밤인데 뭐라도 모아야 할 거 아냐?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  굳이 뭐해야 할까",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "쳇, 귀찮게... 나무라도 캐든지!\n\n!collectBlocks",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Command !collectBlocks was given 0 args, but requires 2 args.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "에잇, 바보야! 나무 종류랑 개수를 말해야지!\n\n!collectBlocks",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Command !collectBlocks was given 0 args, but requires 2 args.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 답답해! 뭘 몇 개 캘지 제대로 말하라고!\n\n예를 들면 oak_log 10개 이런 식으로!",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  뭔가 개인기라도 있니",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "풉, 개인기? 나한테 로봇 몸뚱이가 있다고!\n\n!robotWave",
+        "imagePath": null
+    }
+]

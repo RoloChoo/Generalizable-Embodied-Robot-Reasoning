@@ -1,0 +1,32 @@
+[
+    {
+        "role": "system",
+        "content": "Action output:\nMoved away from x:2.6, y:-60.0, z:5.5 to x:-2.5, y:-60.0, z:8.5.\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "No response from Claude.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  저기 앞에까지",
+        "imagePath": "robot_1761408417309.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 어디까지 가라는 거야?\n\n!goToPlayer(\"koreayang\", 2)",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  저기 앞에까지 가면 된다고.",
+        "imagePath": "robot_1761408417309.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "쳇, 애매하게 말하지 마. 어디가 \"앞에\"야?\n\n!lookAtPlayer(\"koreayang\", \"with\")",
+        "imagePath": null
+    }
+]

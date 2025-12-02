@@ -1,0 +1,112 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕",
+        "imagePath": "robot_1764686361559.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 또 왔네. !robotHi",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n뭐야, 할 일 없어서 로봇한테 인사하러 온 거야?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  일단",
+        "imagePath": "robot_1764686376271.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "쳇, 뭔데 그 사진? !robotLookDown",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  와줄래?",
+        "imagePath": "robot_1764686388955.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... !robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  여기로 달려오라고",
+        "imagePath": "robot_1764686416366.jpg"
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  왜 아무것도 안해?",
+        "imagePath": "robot_1764686451583.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... 왜 명령조야? !robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n그냥 있는 게 편한데. !robotLookRight",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n알았어, 가면 되는 거지? !goToPlayer(\"koreayang\", 3)",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\nUsing non-destructive path to player koreayang.\nArrived near player koreayang.\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n!robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n칫, 뭐야 또. !robotLookLeft",
+        "imagePath": null
+    }
+]

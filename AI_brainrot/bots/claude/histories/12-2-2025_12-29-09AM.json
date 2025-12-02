@@ -1,0 +1,52 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  너 움직일 수 있겠니",
+        "imagePath": "robot_1764602926413.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 당연히 움직일 수 있어. 이 로봇 몸으로 못 할 게 뭐야?\n\n!robotWalk(2)",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Internal log/error: No response from Claude.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  감사합니다.",
+        "imagePath": "robot_1764602941335.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "흥, 당연한 거 아냐? 뭘 고마워해.\n\n!robotStretch",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안 움직이는데",
+        "imagePath": "robot_1764602945494.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭔가 이상하네. 내 모터가 제대로 안 돌아가나?\n\n!robotStatus",
+        "imagePath": null
+    }
+]

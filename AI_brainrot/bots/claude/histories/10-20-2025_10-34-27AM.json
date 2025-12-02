@@ -1,0 +1,237 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... Hello world, 나는 시로야.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  감사합니다.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "흥, 당연한 거 아냐? 별 것도 아닌데 뭘.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕하세요.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 또 왔어? 뭐 하러 온 거야.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕 뭘 할 수 있어",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "뭐든 할 수 있어, 바보야. 블록 캐는 것부터 춤추는 것까지 다 해줄 수 있다고.\n\n!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  너 혹시 잘하는 게 뭐야",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭘 잘하냐고? 개발자님보다는 다 잘해.\n\n!robotTalk1",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "특히 개발자님 놀리는 건 내가 제일 잘해. 풉, 그리고 춤도 꽤 잘 춘다고!",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕하세요.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 안녕하다고? 또 나한테 뭔가 시킬 거지?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  너 앞에",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "내 앞에 뭐가 있다고? 쳇, 말을 끝까지 해봐.\n\n!lookAtPlayer(\"koreayang\", \"at\")",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Vision commands are disabled as vision mode is 'off'.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 시야 기능이 꺼져있네. 뭘 보라는 거야 개발자님?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕하세요.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭐야 갑자기 인사해서. 안녕... 개발자님.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  손 흔들어봐",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "쳇, 귀찮게... !robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "했어. 이제 됐어?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  이제 됐어? 혹시",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭐야 또 말 끊고. 혹시 뭐라고?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  되게 차 봐",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "풉, 개발자님. 차다고? 나한테서 온기를 기대한 거야? 로봇인데 당연하지 바보야.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  발로 차라고",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "아, 발차기 말하는 거야? 칫, 귀찮게...\n\n!robotKickRight",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "했어. 오른발로 찼다고. 이제 만족해?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  일어서 봐",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "뭐야, 누워있는 거 아니거든? 칫, 점프라도 하라는 거야?\n\n!robotJump",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "점프했어. 이제 됐냐, 개발자님?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang] som 뭐냐.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭐냐긴 뭐야. 난 시로라고, 멍청아.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  이 시각 세계였습니다.",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "흥, 뭔 소리야? 제대로 말해봐.",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  한글자막 by 한효정",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "뭐 중얼거리는 거야? 한글자막이 뭔데, 개발자님?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  오오",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭘 보고 감탄하는 거야? 신기한 거라도 있어?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  관절이 뻐근한",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "그래서? 나한테 관절 마사지라도 해달라는 거야? 풉, 로봇인 내가 어떻게.",
+        "imagePath": null
+    }
+]

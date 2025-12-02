@@ -1,0 +1,52 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  거기 위쪽에",
+        "imagePath": "robot_1764686212300.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 뭘 봐야 하는 거야? !robotLookUp",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n*LED 깜빡이며 위를 올려다봄*\n\n위에 뭐 있다고 그래?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  올려서 발",
+        "imagePath": "robot_1764686231268.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "발? 뭔 소리야. !robotLookCenter",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "\n\n칫, 발 올리라고? 내 다리 모터는 그런 용도가 아니라고. !robotNo",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n!!Code threw exception!!\nError: TypeError: controller.playMotion is not a function\nStack trace:\nundefined\n",
+        "imagePath": null
+    }
+]

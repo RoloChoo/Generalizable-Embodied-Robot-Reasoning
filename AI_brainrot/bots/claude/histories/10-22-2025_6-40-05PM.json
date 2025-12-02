@@ -1,0 +1,32 @@
+[
+    {
+        "role": "system",
+        "content": "Respond with hello world and your name",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 귀찮게... 안녕하세요 세계, 나는 시로야. \n\n뭐야, 갑자기 인사하라고 시키는 거야?",
+        "imagePath": null
+    },
+    {
+        "role": "user",
+        "content": "web-client: [koreayang]  안녕",
+        "imagePath": "robot_1761125980122.jpg"
+    },
+    {
+        "role": "assistant",
+        "content": "칫, 안녕. 뭐야, 사진까지 보내면서 인사하는 거야?\n\n!robotWave",
+        "imagePath": null
+    },
+    {
+        "role": "system",
+        "content": "Action output:\n",
+        "imagePath": null
+    },
+    {
+        "role": "assistant",
+        "content": "LED 깜빡이면서 손 흔들었어. 이제 됐냐고?",
+        "imagePath": null
+    }
+]
