@@ -1,0 +1,11 @@
+{
+  "agentAnalytics": {},
+  "messageHistory": {},
+  "systemMetrics": {
+    "startTime": 1764684068280,
+    "totalConnections": 0,
+    "totalMessages": 0,
+    "peakConcurrentAgents": 0
+  },
+  "timestamp": 1764684368290
+}

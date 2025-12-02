@@ -1,0 +1,190 @@
+{
+  "agentAnalytics": {
+    "claude": {
+      "name": "claude",
+      "loginTime": 1764684069054,
+      "totalOnlineTime": 0,
+      "sessionsCount": 1,
+      "messagesReceived": 0,
+      "messagesSent": 16,
+      "commandsExecuted": 0,
+      "lastActivity": 1764684361916,
+      "health": 20,
+      "hunger": 20,
+      "xp": 2,
+      "level": 0,
+      "location": {
+        "x": 90.72885873606305,
+        "y": -60,
+        "z": -44.88566664418895,
+        "dimension": "overworld"
+      },
+      "inventory": [],
+      "combatStats": {
+        "kills": 0,
+        "deaths": 0,
+        "damageDealt": 0,
+        "damageTaken": 0,
+        "mobsKilled": {},
+        "playersKilled": 0,
+        "deathCauses": {},
+        "deathLocations": [],
+        "lastDeathTime": null,
+        "lastDeathCause": null
+      },
+      "activityStats": {
+        "blocksPlaced": 0,
+        "blocksBroken": 0,
+        "itemsCrafted": 0,
+        "distanceTraveled": 0,
+        "timesMoved": 0,
+        "chatMessages": 0
+      },
+      "performance": {
+        "averageResponseTime": 0,
+        "totalRequests": 0,
+        "errorCount": 0,
+        "lastError": null
+      }
+    }
+  },
+  "messageHistory": {
+    "claude": [
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 또 왔네. ",
+        "type": "response",
+        "timestamp": 1764684090804,
+        "id": "msg_1764684090804_tmsij24rb"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "응, 센서로 주변 다 보고 있어. 어둑어둑한 데서 뭘 하려는 거야? ",
+        "type": "response",
+        "timestamp": 1764684110310,
+        "id": "msg_1764684110310_83vp5bu4d"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "응원이라고? 칫, 갑자기 뭔 응원... ",
+        "type": "response",
+        "timestamp": 1764684129688,
+        "id": "msg_1764684129688_39xmujzmq"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "별로 안 기쁜 거 아냐! 그냥 LED가 깜빡거리는 거라고! ",
+        "type": "response",
+        "timestamp": 1764684139909,
+        "id": "msg_1764684139909_dp94gfo1k"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "아, 위킨이라고? 켄니가 아니라 위킨이구나. 칫, 헷갈리게 말하지 마.\n\n어두컴컴한데 뭐 하고 있는 거야? 내 센서로도 잘 안 보여. ",
+        "type": "response",
+        "timestamp": 1764684167442,
+        "id": "msg_1764684167442_f3685j3x8"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "쳇, 왜 위를 보라는 거야? 뭐 있다고? ",
+        "type": "response",
+        "timestamp": 1764684194823,
+        "id": "msg_1764684194823_d0fogecyc"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 어둠뿐이잖아. 밤이라서 아무것도 안 보여. ",
+        "type": "response",
+        "timestamp": 1764684207853,
+        "id": "msg_1764684207853_hzx32iaae"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 뭘 그렇게 보라고 하는 거야? ",
+        "type": "response",
+        "timestamp": 1764684225262,
+        "id": "msg_1764684225262_hrpvmta6d"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "위에 뭐가 있는데 그래? ",
+        "type": "response",
+        "timestamp": 1764684228092,
+        "id": "msg_1764684228092_3s38pgyu3"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "쳇, 이미 위 보고 있는데 뭘 더 보라는 거야? ",
+        "type": "response",
+        "timestamp": 1764684246760,
+        "id": "msg_1764684246760_ypog6x3i1"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 당연히 볼 수 있어. 왼쪽이면 왼쪽, 오른쪽이면 오른쪽 말해봐. ",
+        "type": "response",
+        "timestamp": 1764684257867,
+        "id": "msg_1764684257867_9i6z0pj45"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 오른쪽이 뭐야? ",
+        "type": "response",
+        "timestamp": 1764684271263,
+        "id": "msg_1764684271263_cgq3efbhd"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "쳇, 돌라고? 귀찮게... ",
+        "type": "response",
+        "timestamp": 1764684313240,
+        "id": "msg_1764684313240_ijg2362je"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "흥, 또 움직이라고? ",
+        "type": "response",
+        "timestamp": 1764684336150,
+        "id": "msg_1764684336150_k2eeq6t54"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "칫, 센서 돌려서 옆 봤어. ",
+        "type": "response",
+        "timestamp": 1764684346632,
+        "id": "msg_1764684346632_fgawr03zv"
+      },
+      {
+        "from": "claude",
+        "to": "web-client",
+        "message": "쳇, 귀찮게... ",
+        "type": "response",
+        "timestamp": 1764684361916,
+        "id": "msg_1764684361916_8a4khieot"
+      }
+    ]
+  },
+  "systemMetrics": {
+    "startTime": 1764684064528,
+    "totalConnections": 1,
+    "totalMessages": 16,
+    "peakConcurrentAgents": 1
+  },
+  "timestamp": 1764684364543
+}
