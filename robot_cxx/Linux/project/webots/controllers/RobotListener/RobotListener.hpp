@@ -2,8 +2,8 @@
 // Description:   DARwIn-OP Integrated Controller Header
 //                (Walk + Motion + Camera + HTTP Server)
 
-#ifndef ROBOT_LISTENER_HPP
-#define ROBOT_LISTENER_HPP
+#ifndef walk_HPP
+#define walk_HPP
 
 #define NMOTORS 20
 
