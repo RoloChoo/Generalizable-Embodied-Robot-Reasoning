@@ -1,4 +1,5 @@
-// p - 목/머리 관절 제어 개선 (비대칭 한계 반영)
+// p - 목/머리 관절 제어 개선 (비대칭 한계 반영) + 배치 처리 + NaN 방어 강화
+// C++98 호환 버전 (nullptr → NULL, std::isfinite → 자체 구현)
 
 #include "walk.hpp"
 
@@ -27,6 +28,9 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <cctype>   // isspace, tolower
+#include <cerrno>   // errno
+#include <limits>   // numeric_limits
 #include <vector>
 #include <queue>
 
@@ -40,10 +44,17 @@ using namespace cv;
 // ======================== 목/머리 관절 한계값 정의 ========================
 #define NECK_MOTOR_INDEX 18
 #define HEAD_MOTOR_INDEX 19
-// 목(Neck Pan)은 Java 컨트롤러의 넓고 대칭적인 한계값을 사용 (좌우 회전)
 #define NECK_LIMIT 1.5708  // ±90도 (Java 컨트롤러와 동일)
-// 머리(Head Tilt)는 물리적 비대칭 한계값을 사용하기 위해 이 상수를 더 이상 사용하지 않음
-#define HEAD_LIMIT 0.5236  // ±30도 (참고용, 코드에서는 사용 안 함)
+#define HEAD_LIMIT 0.5236  // ±30도 (참고용)
+
+// ======================== C++98 호환: isfinite 자체 구현 ========================
+static inline bool isFiniteD(double v) {
+    // NaN 체크: v != v
+    // Inf 체크: numeric_limits로 비교
+    return (v == v) && 
+           (v !=  std::numeric_limits<double>::infinity()) &&
+           (v != -std::numeric_limits<double>::infinity());
+}
 
 // ------------------------ 유틸리티 ------------------------
 static void signal_handler(int sig) {
@@ -52,9 +63,61 @@ static void signal_handler(int sig) {
     exit(0);
 }
 
+// NaN-safe clamp (C++98 호환)
 static inline double clampd(double v, double lo, double hi) {
+    // NaN/Inf는 caller가 처리하도록 그대로 반환
+    if (!isFiniteD(v)) return v;
     if (lo > hi) return v;
-    return v < lo ? lo : (v > hi ? hi : v);
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+// 문자열 trim
+static inline void trimInPlace(char* s) {
+    if (!s) return;
+
+    // leading trim
+    char* p = s;
+    while (*p && std::isspace((unsigned char)*p)) p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+
+    // trailing trim
+    size_t n = strlen(s);
+    while (n > 0 && std::isspace((unsigned char)s[n - 1])) {
+        s[n - 1] = '\0';
+        n--;
+    }
+}
+
+// NaN/Inf 토큰 검사
+static inline bool isNanToken(const char* s) {
+    if (!s) return true;
+    // case-insensitive compare for nan/inf
+    char buf[32];
+    size_t n = strlen(s);
+    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+    for (size_t i = 0; i < n; i++) buf[i] = (char)std::tolower((unsigned char)s[i]);
+    buf[n] = '\0';
+
+    // "", "nan", "+nan", "-nan", "inf", "+inf", "-inf"
+    if (buf[0] == '\0') return true;
+    if (strcmp(buf, "nan") == 0 || strcmp(buf, "+nan") == 0 || strcmp(buf, "-nan") == 0) return true;
+    if (strcmp(buf, "inf") == 0 || strcmp(buf, "+inf") == 0 || strcmp(buf, "-inf") == 0) return true;
+    return false;
+}
+
+// 안전한 double 파싱 (C++98 호환: nullptr → NULL)
+static inline bool parseFiniteDouble(const char* s, double* out) {
+    if (!s || !out) return false;
+    errno = 0;
+    char* endp = NULL;  // ✅ C++98: nullptr → NULL
+    double v = strtod(s, &endp);
+    if (endp == s) return false;          // no conversion
+    if (errno == ERANGE) return false;    // overflow/underflow
+    if (!isFiniteD(v)) return false;      // ✅ C++98: std::isfinite → isFiniteD
+    *out = v;
+    return true;
 }
 
 // ------------------------ 카메라 JPEG 공유 ------------------------
@@ -81,7 +144,7 @@ static void encodeToJPEG(const unsigned char* image, int width, int height) {
 }
 
 // ------------------------ 전역 상태 변수 ------------------------
-static pthread_mutex_t g_lock = PTHREAD_MUTIZER;
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Blink (눈 깜빡임)
 static bool    g_blinkMode   = false;
@@ -128,38 +191,38 @@ static const char *motorNames[NMOTORS] = {
     "FootR","FootL","Neck","Head"
 };
 
-// ------------------------ 모션 길이 테이블 (확장됨) ------------------------
+// ------------------------ 모션 길이 테이블 ------------------------
 static double getMotionDuration(int page) {
     switch(page) {
-        case 1:  return 2.0;    // ini / stand
-        case 2:  return 2.0;    // OK / nod yes
-        case 3:  return 2.0;    // no / shake head
-        case 4:  return 2.0;    // hi / tilt
-        case 6:  return 3.0;    // talk1
-        case 9:  return 2.5;    // walkready
-        case 10: return 3.0;    // f up (lying face → up)
-        case 11: return 3.0;    // b up (lying back → up)
-        case 12: return 3.0;    // rk / right kick
-        case 13: return 3.0;    // lk / left kick
-        case 15: return 2.0;    // sit down
-        case 16: return 2.0;    // stand up
-        case 23: return 2.5;    // d1 / arm yes
-        case 24: return 3.0;    // d2 / applaud
-        case 27: return 2.5;    // d3 / arm+head yes
-        case 29: return 3.0;    // talk2
-        case 31: return 3.0;    // d4 / stretch
-        case 38: return 2.5;    // wave hand
-        case 54: return 3.0;    // int (applaud louder)
-        case 57: return 3.0;    // int (applaud)
-        case 70: return 3.0;    // rPASS
-        case 71: return 3.0;    // lPASS
-        case 90: return 3.0;    // lie down (front)
-        case 91: return 3.0;    // lie up (back)
+        case 1:  return 2.0;
+        case 2:  return 2.0;
+        case 3:  return 2.0;
+        case 4:  return 2.0;
+        case 6:  return 3.0;
+        case 9:  return 2.5;
+        case 10: return 3.0;
+        case 11: return 3.0;
+        case 12: return 3.0;
+        case 13: return 3.0;
+        case 15: return 2.0;
+        case 16: return 2.0;
+        case 23: return 2.5;
+        case 24: return 3.0;
+        case 27: return 2.5;
+        case 29: return 3.0;
+        case 31: return 3.0;
+        case 38: return 2.5;
+        case 54: return 3.0;
+        case 57: return 3.0;
+        case 70: return 3.0;
+        case 71: return 3.0;
+        case 90: return 3.0;
+        case 91: return 3.0;
         default: return 3.0;
     }
 }
 
-// ------------------------ HTML 대시보드 (확장된 모션 + 눈 깜빡임) ------------------------
+// ------------------------ HTML 대시보드 ------------------------
 static const char* HTML =
 "HTTP/1.1 200 OK\r\nContent-Type:text/html;charset=utf-8\r\nConnection:close\r\n\r\n"
 "<!doctype html><html><head><meta charset='utf-8'>"
@@ -306,27 +369,90 @@ static void* http_server(void* arg) {
                 printf("🎬 Motion queued: page %d\n", cmd.page);
             }
         }
-        // set_joint: 목/머리는 Java 한계값 사용
+        // ========== 🆕 배치 처리 (set_joints) - NaN 방어 강화 ==========
+        else if (strstr(line, "command=set_joints")) {
+            char* vPos = strstr(line, "v=");
+            if (vPos) {
+                char values[1024];
+                strncpy(values, vPos + 2, sizeof(values) - 1);
+                values[sizeof(values) - 1] = '\0';
+
+                // URL 끝 표시(&, 공백, HTTP) 찾아서 자르기
+                char* end = strchr(values, '&');
+                if (end) *end = '\0';
+                end = strchr(values, ' ');
+                if (end) *end = '\0';
+
+                char* token = strtok(values, ",");
+                int idx = 0;
+                int updated = 0;
+
+                while (token != NULL && idx < NMOTORS) {
+                    trimInPlace(token);
+
+                    // "nan"/"NaN"/공백/inf 등은 모두 스킵
+                    if (!isNanToken(token)) {
+                        double val;
+                        if (parseFiniteDouble(token, &val)) {
+                            double safe;
+
+                            if (idx == NECK_MOTOR_INDEX) {
+                                safe = clampd(val, -NECK_LIMIT, NECK_LIMIT);
+                            } else if (idx == HEAD_MOTOR_INDEX) {
+                                safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
+                            } else {
+                                safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
+                            }
+
+                            // clamp 결과도 NaN이면 스킵(최종 방어)
+                            if (isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
+                                g_targetPositions[idx] = safe;
+                                g_jointUpdated[idx] = true;
+                                updated++;
+                            }
+                        }
+                    }
+
+                    token = strtok(NULL, ",");
+                    idx++;
+                }
+                printf("📦 Batch update: %d/%d joints\n", updated, idx);
+            }
+        }
+        // ========== 단일 관절 처리 (set_joint) - NaN 방어 강화 ==========
         else if (strstr(line, "command=set_joint")) {
             char* iPos = strstr(line, "index=");
             char* vPos = strstr(line, "value=");
             if (iPos && vPos) {
-                int idx = atoi(iPos+6);
-                double val = atof(vPos+6);
-                if (idx >= 0 && idx < NMOTORS) {
-                    double safe;
-                    if (idx == NECK_MOTOR_INDEX) {
-                        // Neck Pan (18)는 대칭적인 Java 한계값 사용
-                        safe = clampd(val, -NECK_LIMIT, NECK_LIMIT);
-                    } else if (idx == HEAD_MOTOR_INDEX) {
-                        // 🚨 수정: Head Tilt (19)는 Webots가 감지한 비대칭 물리 한계값 사용
-                        safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
-                    } else {
-                        // 나머지 관절은 Webots 물리 한계값 사용
-                        safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
+                int idx = atoi(iPos + 6);
+
+                // value 부분을 안전하게 잘라서 파싱(& 또는 공백에서 종료)
+                char vbuf[64];
+                strncpy(vbuf, vPos + 6, sizeof(vbuf) - 1);
+                vbuf[sizeof(vbuf) - 1] = '\0';
+                char* end = strchr(vbuf, '&');
+                if (end) *end = '\0';
+                end = strchr(vbuf, ' ');
+                if (end) *end = '\0';
+                trimInPlace(vbuf);
+
+                if (idx >= 0 && idx < NMOTORS && !isNanToken(vbuf)) {
+                    double val;
+                    if (parseFiniteDouble(vbuf, &val)) {
+                        double safe;
+                        if (idx == NECK_MOTOR_INDEX) {
+                            safe = clampd(val, -NECK_LIMIT, NECK_LIMIT);
+                        } else if (idx == HEAD_MOTOR_INDEX) {
+                            safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
+                        } else {
+                            safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
+                        }
+
+                        if (isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
+                            g_targetPositions[idx] = safe;
+                            g_jointUpdated[idx] = true;
+                        }
                     }
-                    g_targetPositions[idx] = safe;
-                    g_jointUpdated[idx] = true;
                 }
             }
         }
@@ -368,11 +494,9 @@ RobotListener::RobotListener() : Robot() {
     Gyro* gyro = getGyro("Gyro");
     if (gyro) gyro->enable(mTimeStep);
 
-    // 모터 초기화 및 범위 자동 감지
     for (int i = 0; i < NMOTORS; i++) {
         mMotors[i] = getMotor(motorNames[i]);
         if (mMotors[i]) {
-            // Webots에서 모터의 물리적 한계값(비대칭일 수 있음)을 자동으로 읽어옴
             minMotorPositions[i] = mMotors[i]->getMinPosition();
             maxMotorPositions[i] = mMotors[i]->getMaxPosition();
             mMotors[i]->enablePosition(mTimeStep);
@@ -413,11 +537,9 @@ void RobotListener::checkIfFallen() {
 void RobotListener::run() {
     signal(SIGINT, signal_handler);
 
-    // HTTP 서버 시작
     pthread_t th;
     pthread_create(&th, NULL, http_server, NULL);
 
-    // 초기 상태: 서 있기 (Init Pose)
     myStep();
     printf("🤖 Setting initial pose (Stand)...\n");
     mMotionManager->playPage(1, false);
@@ -442,7 +564,6 @@ void RobotListener::run() {
         double x=g_xAmplitude, y=g_yAmplitude, a=g_aAmplitude;
         pthread_mutex_unlock(&g_lock);
 
-        // 걷기 로직
         if (sWalk && !g_isWalking) { mGaitManager->start(); g_isWalking=true; }
         if (eWalk && g_isWalking)  { mGaitManager->stop(); g_isWalking=false; }
         if (g_isWalking) {
@@ -452,7 +573,6 @@ void RobotListener::run() {
             mGaitManager->step(mTimeStep);
         }
 
-        // 모션 로직
         bool playing = (now - g_motionStartTime) < g_motionDuration;
         pthread_mutex_lock(&g_lock);
         if (!g_motionQueue.empty() && !playing && !g_isWalking) {
@@ -469,39 +589,38 @@ void RobotListener::run() {
             pthread_mutex_unlock(&g_lock);
         }
 
-        // 관절 직접 제어
+        // ========== 모터 적용 루프 - NaN 최종 방어 추가 ==========
         pthread_mutex_lock(&g_lock);
         for(int i=0; i<NMOTORS; i++) {
             if(g_jointUpdated[i]) {
-                // 머리(19)와 목(18)은 더 빠르게 반응
                 double alpha = (i >= 18) ? 0.5 : FILTER_ALPHA;
                 g_filteredPositions[i] = alpha * g_targetPositions[i] + (1.0-alpha)*g_filteredPositions[i];
                 
-                // 최종 클램핑
                 double safe;
                 if (i == NECK_MOTOR_INDEX) {
-                    // Neck Pan (18): 대칭 한계 (±90도) 사용
                     safe = clampd(g_filteredPositions[i], -NECK_LIMIT, NECK_LIMIT);
                 } 
                 else if (i == HEAD_MOTOR_INDEX) {
-                    // 🚨 수정: Head Tilt (19): Webots의 비대칭 물리 한계값 사용
                     safe = clampd(g_filteredPositions[i], minMotorPositions[i], maxMotorPositions[i]);
                 }
                 else {
-                    // 나머지 관절: Webots의 물리 한계값 사용
                     safe = clampd(g_filteredPositions[i], minMotorPositions[i], maxMotorPositions[i]);
                 }
                 
+                // 최종 방어: NaN/Inf면 모터 호출 금지
+                if (!isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
+                    g_jointUpdated[i] = false; // NaN이 계속 남아 무한 에러나는 것 방지
+                    continue;
+                }
+
                 if(mMotors[i]) mMotors[i]->setPosition(safe);
                 if(fabs(g_filteredPositions[i]-g_targetPositions[i]) < 0.001) g_jointUpdated[i]=false;
             }
         }
         pthread_mutex_unlock(&g_lock);
 
-        // LED 제어
-        if(mHeadLED) mHeadLED->set(0xFF0000); // 머리 LED는 항상 빨간색
+        if(mHeadLED) mHeadLED->set(0xFF0000);
         
-        // 👁️ 눈 깜빡임 로직
         if(blink) {
             if(now - g_lastBlinkT > 0.15) { 
                 g_blinkState = !g_blinkState; 
@@ -509,10 +628,9 @@ void RobotListener::run() {
             }
             if(mEyeLED) mEyeLED->set(g_blinkState ? 0x00FF00 : 0x000000);
         } else {
-            if(mEyeLED) mEyeLED->set(0x00FF00); // 항상 초록색
+            if(mEyeLED) mEyeLED->set(0x00FF00);
         }
 
-        // 모션 복귀
         if(!playing && g_currentMotion != 0) {
             if(g_currentMotion != 1 && !g_isWalking) {
                 printf("⏹️ Motion %d completed, returning to stand\n", g_currentMotion);
