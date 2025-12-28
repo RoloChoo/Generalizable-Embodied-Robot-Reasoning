@@ -15,7 +15,7 @@ import { analyticsManager } from './analytics.js';
 // ROBOT SERVICE - Centralized Robot Control
 // ============================================================
 
-const DEFAULT_ROBOT_URL = process.env.ROBOT_BASE_URL || 'http://175.199.234.42:8080';
+const DEFAULT_ROBOT_URL = process.env.ROBOT_BASE_URL || 'http://203.228.80.128:8080';
 
 /**
  * RobotService - Centralized robot control with Action Lock
@@ -24,7 +24,7 @@ const DEFAULT_ROBOT_URL = process.env.ROBOT_BASE_URL || 'http://175.199.234.42:8
  * - Motion commands (waveHand, jump, etc.): REQUIRE lock check
  * - Blink/Track/Camera: NO lock required (TTS should always work)
  */
-export class RobotService {
+class RobotService {
   constructor(baseUrl = DEFAULT_ROBOT_URL) {
     this.baseUrl = String(baseUrl).replace(/\/+$/, '');
     this.timeoutMs = 800;
@@ -62,6 +62,15 @@ export class RobotService {
     };
 
     console.log(`🤖 RobotService initialized: ${this.baseUrl}`);
+    
+    // 초기 연결 시 상태 동기화 시도
+    this.ping().then(() => {
+      this.syncState().catch(() => {
+        console.log('⚠️ Initial state sync failed, using defaults');
+      });
+    }).catch(() => {
+      console.log('⚠️ Initial connection failed');
+    });
   }
 
   // ===================== INTERNAL HTTP UTILS =====================
@@ -131,32 +140,6 @@ export class RobotService {
       }
     }
     throw new Error(`${label} failed: ${lastErr?.message || lastErr}`);
-  }
-
-  _normalizeWalkComponent(value) {
-    if (typeof value === 'boolean') return value ? 1 : 0;
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) return 0;
-      return value > 0 ? 1 : 0;
-    }
-    if (typeof value === 'string') {
-      const num = Number(value);
-      if (Number.isFinite(num)) {
-        return num > 0 ? 1 : 0;
-      }
-    }
-    return 0;
-  }
-
-  _buildWalkQuery(vector = {}) {
-    const params = new URLSearchParams({
-      command: 'set_walk',
-      f: this._normalizeWalkComponent(vector.forward ?? vector.f ?? 0),
-      b: this._normalizeWalkComponent(vector.backward ?? vector.b ?? 0),
-      l: this._normalizeWalkComponent(vector.left ?? vector.l ?? 0),
-      r: this._normalizeWalkComponent(vector.right ?? vector.r ?? 0),
-    });
-    return `/?${params.toString()}`;
   }
 
   // ===================== CONNECTION & DIAGNOSTICS =====================
@@ -373,28 +356,68 @@ export class RobotService {
     return { success: true, task_id: taskId };
   }
 
+  // ===================== STATE SYNC =====================
+
+  /**
+   * Sync local state with robot's actual state
+   */
+  async syncState() {
+    try {
+      const info = await this.getInfo();
+      // C++ 서버가 blink/track 상태를 info에 포함시킨다면
+      if (typeof info.blink !== 'undefined') {
+        this.blinkState = info.blink;
+      }
+      if (typeof info.track !== 'undefined') {
+        this.trackState = info.track;
+      }
+      if (this.debug) console.log(`🔄 State synced: blink=${this.blinkState}, track=${this.trackState}`);
+    } catch (error) {
+      if (this.debug) console.log(`⚠️ Could not sync state: ${error.message}`);
+    }
+  }
+
   // ===================== BLINK / TRACK (NO LOCK REQUIRED) =====================
 
   async toggleBlink() {
     await this.ensureConnection();
-    await this._retry(() => this._get('/?blink=toggle'), 'toggleBlink');
+    await this._retry(() => this._get('/?command=blink_toggle'), 'toggleBlink');
     this.blinkState = !this.blinkState;
+    if (this.debug) console.log(`🤖 Blink toggled -> ${this.blinkState}`);
   }
 
   async setBlink(on) {
     await this.ensureConnection();
-    if (this.blinkState !== on) await this.toggleBlink();
+    // 상태가 다를 때만 토글
+    if (this.blinkState !== on) {
+      await this.toggleBlink();
+    } else {
+      if (this.debug) console.log(`🤖 Blink already ${on ? 'ON' : 'OFF'}, skipping`);
+    }
   }
 
   async toggleTrack() {
     await this.ensureConnection();
-    await this._retry(() => this._get('/?track=toggle'), 'toggleTrack');
-    this.trackState = !this.trackState;
+    // C++에 track_toggle 명령이 없으면 에러 발생 가능
+    // 일단 명령은 보내되, 실패해도 계속 진행
+    try {
+      await this._retry(() => this._get('/?command=track_toggle'), 'toggleTrack');
+      this.trackState = !this.trackState;
+      if (this.debug) console.log(`🤖 Track toggled -> ${this.trackState}`);
+    } catch (error) {
+      console.warn(`⚠️ Track toggle not supported by C++ server: ${error.message}`);
+      // 로컬 상태만 변경 (C++ 서버가 지원 안 할 경우 대비)
+      this.trackState = !this.trackState;
+    }
   }
 
   async setTrack(on) {
     await this.ensureConnection();
-    if (this.trackState !== on) await this.toggleTrack();
+    if (this.trackState !== on) {
+      await this.toggleTrack();
+    } else {
+      if (this.debug) console.log(`🤖 Track already ${on ? 'ON' : 'OFF'}, skipping`);
+    }
   }
 
   // TTS callbacks - always allowed (no lock)
@@ -473,59 +496,6 @@ export class RobotService {
   async stretch(agentName) { return this.sendMotion(31, agentName); }
   async jump(agentName) { return this.sendMotion(237, agentName); }
   async quickJump(agentName) { return this.sendMotion(239, agentName); }
-
-  async startWalk(agentName = 'agent') {
-    if (!this.canAgentExecute(agentName)) {
-      return { success: false, error: `Lock held by ${this.lock.owner}` };
-    }
-    await this.ensureConnection();
-    await this._retry(() => this._get('/?command=walk_start'), 'startWalk');
-    return { success: true };
-  }
-
-  async stopWalk(agentName = 'agent') {
-    if (!this.canAgentExecute(agentName)) {
-      return { success: false, error: `Lock held by ${this.lock.owner}` };
-    }
-    await this.ensureConnection();
-    await this._retry(() => this._get('/?command=walk_stop'), 'stopWalk');
-    return { success: true };
-  }
-
-  async setWalkVector(vector = {}, agentName = 'agent') {
-    if (!this.canAgentExecute(agentName)) {
-      return { success: false, error: `Lock held by ${this.lock.owner}` };
-    }
-    await this.ensureConnection();
-    const query = this._buildWalkQuery(vector);
-    await this._retry(() => this._get(query), 'setWalkVector');
-    return { success: true };
-  }
-
-  async setJoint(index, value, agentName = 'agent') {
-    if (!this.canAgentExecute(agentName)) {
-      return { success: false, error: `Lock held by ${this.lock.owner}` };
-    }
-
-    const idx = Number(index);
-    const val = Number(value);
-    if (!Number.isInteger(idx)) {
-      throw new Error(`Invalid joint index: ${index}`);
-    }
-    if (!Number.isFinite(val)) {
-      throw new Error(`Invalid joint value: ${value}`);
-    }
-
-    const params = new URLSearchParams({
-      command: 'set_joint',
-      index: idx,
-      value: val.toFixed(4),
-    });
-
-    await this.ensureConnection();
-    await this._retry(() => this._get(`/?${params.toString()}`), `setJoint(${idx})`);
-    return { success: true };
-  }
 
   // ===================== CAMERA (NO LOCK REQUIRED) =====================
 
@@ -754,6 +724,16 @@ export function createMindServer(port = 8080) {
       res.json(status);
     } catch (error) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // State sync endpoint
+  app.post('/robot/sync', async (req, res) => {
+    try {
+      await robot.syncState();
+      res.json({ success: true, state: { blink: robot.blinkState, track: robot.trackState } });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 
@@ -1188,6 +1168,20 @@ export function createMindServer(port = 8080) {
         socket.emit('robot-status-result', errorResult);
       }
     });
+
+    // State sync
+    socket.on('robot-sync', async (callback) => {
+      try {
+        await robot.syncState();
+        const result = { success: true, state: { blink: robot.blinkState, track: robot.trackState } };
+        if (callback) callback(result);
+        socket.emit('robot-sync-result', result);
+      } catch (error) {
+        const errorResult = { success: false, error: error.message };
+        if (callback) callback(errorResult);
+        socket.emit('robot-sync-result', errorResult);
+      }
+    });
   });
 
   server.listen(port, 'localhost', () => {
@@ -1226,3 +1220,5 @@ export function getAllInGameAgentNames() {
   return Object.keys(inGameAgents);
 }
 
+// Export RobotService class for direct use if needed
+export { RobotService };
