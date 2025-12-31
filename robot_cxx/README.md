@@ -72,6 +72,8 @@ sudo dhclient     # 새 IP 받기
 
 
 크래쉬 났을 때
+
+
 mount -o remount.rw /
 
 
