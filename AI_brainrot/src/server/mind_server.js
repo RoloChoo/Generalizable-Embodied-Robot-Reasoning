@@ -11,15 +11,28 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { analyticsManager } from './analytics.js';
 
+// ✅ settings에서 로봇 IP/URL 정보를 가져오도록 추가
+import settings from '../../settings.js';
+
 // ============================================================
 // ROBOT SERVICE - Centralized Robot Control
 // ============================================================
 
-const DEFAULT_ROBOT_URL = process.env.ROBOT_BASE_URL || 'http://203.228.80.128:8080';
+// ✅ "로봇 URL" 단일 소스: settings.robot_base_url
+// (settings.js에서 이미 env fallback 처리하므로 여기서는 settings 우선)
+const DEFAULT_ROBOT_URL =
+  settings?.robot_base_url ||
+  process.env.ROBOT_BASE_URL ||
+  'http://203.228.80.129:8080';
+
+function toFiniteNumber(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 /**
  * RobotService - Centralized robot control with Action Lock
- * 
+ *
  * Lock Scope:
  * - Motion commands (waveHand, jump, etc.): REQUIRE lock check
  * - Blink/Track/Camera: NO lock required (TTS should always work)
@@ -27,8 +40,12 @@ const DEFAULT_ROBOT_URL = process.env.ROBOT_BASE_URL || 'http://203.228.80.128:8
 class RobotService {
   constructor(baseUrl = DEFAULT_ROBOT_URL) {
     this.baseUrl = String(baseUrl).replace(/\/+$/, '');
-    this.timeoutMs = 800;
-    this.retries = 2;
+
+    // ✅ settings 기반으로 timeout/retry 적용
+    this.timeoutMs = toFiniteNumber(settings?.http_timeout_ms, 800);
+    this.retries = toFiniteNumber(settings?.max_http_retries, 2);
+
+    // 디버그는 필요하면 env로 끄도록(기존 동작 유지)
     this.debug = true;
 
     // Connection state
@@ -62,7 +79,8 @@ class RobotService {
     };
 
     console.log(`🤖 RobotService initialized: ${this.baseUrl}`);
-    
+    console.log(`🤖 RobotService config: timeoutMs=${this.timeoutMs}, retries=${this.retries}`);
+
     // 초기 연결 시 상태 동기화 시도
     this.ping().then(() => {
       this.syncState().catch(() => {
@@ -184,9 +202,6 @@ class RobotService {
 
   // ===================== ACTION LOCK MANAGEMENT =====================
 
-  /**
-   * Get current lock status
-   */
   getLockStatus() {
     return {
       isLocked: this.lock.owner !== null,
@@ -199,25 +214,15 @@ class RobotService {
     };
   }
 
-  /**
-   * Try to acquire lock for motion commands
-   * @param {string} requesterId - Who is requesting (agent name, 'contral', 'external_rl')
-   * @param {string} requesterType - 'agent' | 'contral' | 'external_rl'
-   * @param {object} options - { taskId, taskType, force }
-   * @returns {boolean} - true if lock acquired
-   */
   acquireLock(requesterId, requesterType, options = {}) {
     const { taskId = null, taskType = null, force = false } = options;
 
-    // If already locked by same requester, allow
     if (this.lock.owner === requesterId && this.lock.ownerType === requesterType) {
       console.log(`🔓 Lock already held by ${requesterId}`);
       return true;
     }
 
-    // If locked by someone else
     if (this.lock.owner !== null) {
-      // Force release (for emergency or contral override)
       if (force && requesterType === 'contral') {
         console.log(`⚠️ Force releasing lock from ${this.lock.owner} for contral`);
         this._releaseLockInternal();
@@ -227,7 +232,6 @@ class RobotService {
       }
     }
 
-    // Acquire lock
     this.lock = {
       owner: requesterId,
       ownerType: requesterType,
@@ -239,18 +243,11 @@ class RobotService {
     return true;
   }
 
-  /**
-   * Release lock
-   * @param {string} requesterId - Who is releasing
-   * @param {string} requesterType - Type of requester
-   * @returns {boolean} - true if released
-   */
   releaseLock(requesterId, requesterType) {
     if (this.lock.owner === null) {
-      return true; // Already free
+      return true;
     }
 
-    // Only owner can release (or contral can force)
     if (this.lock.owner !== requesterId && requesterType !== 'contral') {
       console.log(`🔒 Cannot release lock - owned by ${this.lock.owner}, requested by ${requesterId}`);
       return false;
@@ -271,26 +268,15 @@ class RobotService {
     };
   }
 
-  /**
-   * Check if agent can execute motion commands
-   * Fail-open policy: if coordinator unavailable, allow execution
-   * @param {string} agentName - Name of the agent
-   * @returns {boolean}
-   */
   canAgentExecute(agentName = 'agent') {
-    // If lock is free, agent can execute
-    if (this.lock.owner === null) {
-      return true;
-    }
+    if (this.lock.owner === null) return true;
 
-    // If agent owns the lock, can execute
     if (this.lock.owner === agentName && this.lock.ownerType === 'agent') {
       return true;
     }
 
-    // If external RL has lock but it's stale (>5 minutes), auto-release
     if (this.lock.ownerType === 'external_rl') {
-      const staleDuration = 5 * 60 * 1000; // 5 minutes
+      const staleDuration = 5 * 60 * 1000;
       if (Date.now() - this.lock.acquiredAt > staleDuration) {
         console.log(`⚠️ Auto-releasing stale external RL lock`);
         this._releaseLockInternal();
@@ -298,21 +284,13 @@ class RobotService {
       }
     }
 
-    // Otherwise, locked by someone else
     console.log(`🔒 Agent ${agentName} blocked - lock held by ${this.lock.owner} (${this.lock.ownerType})`);
     return false;
   }
 
-  /**
-   * Trigger external RL task
-   * @param {string} taskType - Type of task (e.g., 'fetch_object')
-   * @param {object} params - Task parameters
-   * @returns {Promise<{success: boolean, task_id?: string, error?: string}>}
-   */
   async triggerExternalRL(taskType, params = {}) {
     const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Try to acquire lock for external RL
     if (!this.acquireLock('external_rl', 'external_rl', { taskId, taskType })) {
       return {
         success: false,
@@ -320,7 +298,6 @@ class RobotService {
       };
     }
 
-    // If external RL endpoint is configured, notify it
     if (this.externalRL.enabled && this.externalRL.endpoint) {
       try {
         const response = await fetch(`${this.externalRL.endpoint}/task`, {
@@ -342,10 +319,8 @@ class RobotService {
       }
     }
 
-    // If external RL not configured, just hold the lock (simulated)
     console.log(`🧠 External RL task (simulated): ${taskType} (${taskId})`);
-    
-    // Auto-release after 30 seconds for simulated tasks
+
     setTimeout(() => {
       if (this.lock.taskId === taskId) {
         console.log(`🔓 Auto-releasing simulated external RL task: ${taskId}`);
@@ -358,13 +333,9 @@ class RobotService {
 
   // ===================== STATE SYNC =====================
 
-  /**
-   * Sync local state with robot's actual state
-   */
   async syncState() {
     try {
       const info = await this.getInfo();
-      // C++ 서버가 blink/track 상태를 info에 포함시킨다면
       if (typeof info.blink !== 'undefined') {
         this.blinkState = info.blink;
       }
@@ -388,7 +359,6 @@ class RobotService {
 
   async setBlink(on) {
     await this.ensureConnection();
-    // 상태가 다를 때만 토글
     if (this.blinkState !== on) {
       await this.toggleBlink();
     } else {
@@ -398,15 +368,12 @@ class RobotService {
 
   async toggleTrack() {
     await this.ensureConnection();
-    // C++에 track_toggle 명령이 없으면 에러 발생 가능
-    // 일단 명령은 보내되, 실패해도 계속 진행
     try {
       await this._retry(() => this._get('/?command=track_toggle'), 'toggleTrack');
       this.trackState = !this.trackState;
       if (this.debug) console.log(`🤖 Track toggled -> ${this.trackState}`);
     } catch (error) {
       console.warn(`⚠️ Track toggle not supported by C++ server: ${error.message}`);
-      // 로컬 상태만 변경 (C++ 서버가 지원 안 할 경우 대비)
       this.trackState = !this.trackState;
     }
   }
@@ -420,7 +387,6 @@ class RobotService {
     }
   }
 
-  // TTS callbacks - always allowed (no lock)
   async onSpeechStart() {
     try {
       await this.setBlink(true);
@@ -464,12 +430,6 @@ class RobotService {
 
   // ===================== MOTION COMMANDS (LOCK REQUIRED) =====================
 
-  /**
-   * Execute motion with lock check
-   * @param {number} page - Motion page ID
-   * @param {string} agentName - Requester name
-   * @returns {Promise<{success: boolean, error?: string}>}
-   */
   async sendMotion(page, agentName = 'agent') {
     if (!this.canAgentExecute(agentName)) {
       return { success: false, error: `Lock held by ${this.lock.owner}` };
@@ -479,7 +439,6 @@ class RobotService {
     return { success: true };
   }
 
-  // Named motion helpers (all check lock)
   async waveHand(agentName) { return this.sendMotion(38, agentName); }
   async applaud(agentName) { return this.sendMotion(24, agentName); }
   async tiltHi(agentName) { return this.sendMotion(4, agentName); }
@@ -534,13 +493,14 @@ let robotService = null;
 
 export function getRobotService() {
   if (!robotService) {
-    robotService = new RobotService();
+    // ✅ settings.robot_base_url로 초기화
+    robotService = new RobotService(settings?.robot_base_url || DEFAULT_ROBOT_URL);
   }
   return robotService;
 }
 
 export function initRobotService(baseUrl) {
-  robotService = new RobotService(baseUrl);
+  robotService = new RobotService(baseUrl || settings?.robot_base_url || DEFAULT_ROBOT_URL);
   return robotService;
 }
 
@@ -564,12 +524,15 @@ function broadcastAnalytics() {
 
 setInterval(broadcastAnalytics, 10000);
 
-export function createMindServer(port = 8080) {
+// ✅ settings 기반으로 mindserver host/port도 쓸 수 있게(기본은 기존과 동일하게 localhost/8080)
+export function createMindServer(
+  port = toFiniteNumber(settings?.mindserver_port, 8080),
+  host = settings?.mindserver_host || 'localhost'
+) {
   const app = express();
   server = http.createServer(app);
   io = new Server(server);
 
-  // JSON body parser for REST endpoints
   app.use(express.json());
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -578,7 +541,6 @@ export function createMindServer(port = 8080) {
   // ========== REST API: ROBOT CONTROL ==========
   const robot = getRobotService();
 
-  // Health check
   app.get('/robot/health', async (req, res) => {
     try {
       const health = await robot.healthCheck();
@@ -588,12 +550,10 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // Lock status
   app.get('/robot/lock', (req, res) => {
     res.json(robot.getLockStatus());
   });
 
-  // Acquire lock
   app.post('/robot/lock/acquire', (req, res) => {
     const { requesterId, requesterType, taskId, taskType, force } = req.body;
     const success = robot.acquireLock(
@@ -604,7 +564,6 @@ export function createMindServer(port = 8080) {
     res.json({ success, lock: robot.getLockStatus() });
   });
 
-  // Release lock
   app.post('/robot/lock/release', (req, res) => {
     const { requesterId, requesterType } = req.body;
     const success = robot.releaseLock(
@@ -614,21 +573,18 @@ export function createMindServer(port = 8080) {
     res.json({ success, lock: robot.getLockStatus() });
   });
 
-  // Check if agent can execute
   app.get('/robot/can-execute', (req, res) => {
     const agentName = req.query.agent || 'agent';
     const canExecute = robot.canAgentExecute(agentName);
     res.json({ canExecute, lock: robot.getLockStatus() });
   });
 
-  // Trigger external RL task
   app.post('/robot/external-rl', async (req, res) => {
     const { taskType, params } = req.body;
     const result = await robot.triggerExternalRL(taskType, params || {});
     res.json(result);
   });
 
-  // Motion command (with lock check)
   app.post('/robot/motion', async (req, res) => {
     const { motionId, agentName } = req.body;
     try {
@@ -639,7 +595,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // Named motion shortcuts
   const motionEndpoints = [
     'waveHand', 'applaud', 'tiltHi', 'talk1', 'talk2',
     'rightKick', 'leftKick', 'rightPass', 'leftPass',
@@ -659,9 +614,8 @@ export function createMindServer(port = 8080) {
     });
   });
 
-  // Blink control (no lock required)
   app.post('/robot/blink', async (req, res) => {
-    const { state } = req.body; // 'on', 'off', 'toggle'
+    const { state } = req.body;
     try {
       if (state === 'on') await robot.setBlink(true);
       else if (state === 'off') await robot.setBlink(false);
@@ -672,7 +626,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // Track control (no lock required)
   app.post('/robot/track', async (req, res) => {
     const { state } = req.body;
     try {
@@ -685,7 +638,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // TTS speech events (no lock required)
   app.post('/robot/speech/start', async (req, res) => {
     const success = await robot.onSpeechStart();
     res.json({ success });
@@ -696,7 +648,6 @@ export function createMindServer(port = 8080) {
     res.json({ success });
   });
 
-  // Camera capture (no lock required)
   app.get('/robot/camera', async (req, res) => {
     try {
       const buf = await robot.fetchCameraBuffer({ timeoutMs: 2000 });
@@ -707,7 +658,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // Robot info
   app.get('/robot/info', async (req, res) => {
     try {
       const info = await robot.getInfo();
@@ -717,7 +667,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // Robot status
   app.get('/robot/status', async (req, res) => {
     try {
       const status = await robot.getStatus();
@@ -727,7 +676,6 @@ export function createMindServer(port = 8080) {
     }
   });
 
-  // State sync endpoint
   app.post('/robot/sync', async (req, res) => {
     try {
       await robot.syncState();
@@ -924,15 +872,10 @@ export function createMindServer(port = 8080) {
       socket.emit('analytics-export', exportData);
     });
 
+    // ✅ settings 반환도 이미 import된 settings를 그대로 사용(설정에 IP/URL 포함)
     socket.on('get-settings', () => {
       try {
-        import('../../settings.js').then(settingsModule => {
-          const settings = settingsModule.default;
-          socket.emit('settings-data', settings);
-        }).catch(error => {
-          console.error('Error loading settings:', error);
-          socket.emit('settings-data', {});
-        });
+        socket.emit('settings-data', settings);
       } catch (error) {
         console.error('Error getting settings:', error);
         socket.emit('settings-data', {});
@@ -1010,7 +953,6 @@ export function createMindServer(port = 8080) {
 
     // ========== SOCKET.IO: ROBOT CONTROL EVENTS ==========
 
-    // Robot health check
     socket.on('robot-health', async (callback) => {
       try {
         const health = await robot.healthCheck();
@@ -1023,14 +965,12 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // Robot lock status
     socket.on('robot-lock-status', (callback) => {
       const status = robot.getLockStatus();
       if (callback) callback(status);
       socket.emit('robot-lock-status-result', status);
     });
 
-    // Acquire robot lock
     socket.on('robot-lock-acquire', ({ requesterId, requesterType, taskId, taskType, force }, callback) => {
       const success = robot.acquireLock(
         requesterId || curAgentName || 'unknown',
@@ -1041,11 +981,9 @@ export function createMindServer(port = 8080) {
       if (callback) callback(result);
       socket.emit('robot-lock-acquire-result', result);
 
-      // Broadcast lock change to all clients
       io.emit('robot-lock-changed', robot.getLockStatus());
     });
 
-    // Release robot lock
     socket.on('robot-lock-release', ({ requesterId, requesterType }, callback) => {
       const success = robot.releaseLock(
         requesterId || curAgentName || 'unknown',
@@ -1055,11 +993,9 @@ export function createMindServer(port = 8080) {
       if (callback) callback(result);
       socket.emit('robot-lock-release-result', result);
 
-      // Broadcast lock change to all clients
       io.emit('robot-lock-changed', robot.getLockStatus());
     });
 
-    // Check if agent can execute
     socket.on('robot-can-execute', ({ agentName }, callback) => {
       const canExecute = robot.canAgentExecute(agentName || curAgentName || 'agent');
       const result = { canExecute, lock: robot.getLockStatus() };
@@ -1067,7 +1003,6 @@ export function createMindServer(port = 8080) {
       socket.emit('robot-can-execute-result', result);
     });
 
-    // Execute motion
     socket.on('robot-motion', async ({ motionId, agentName }, callback) => {
       try {
         const result = await robot.sendMotion(motionId, agentName || curAgentName || 'agent');
@@ -1080,7 +1015,6 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // Named motion shortcuts via socket
     socket.on('robot-action', async ({ action, agentName }, callback) => {
       if (typeof robot[action] === 'function') {
         try {
@@ -1099,7 +1033,6 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // Blink control
     socket.on('robot-blink', async ({ state }, callback) => {
       try {
         if (state === 'on') await robot.setBlink(true);
@@ -1115,7 +1048,6 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // Track control
     socket.on('robot-track', async ({ state }, callback) => {
       try {
         if (state === 'on') await robot.setTrack(true);
@@ -1131,7 +1063,6 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // Speech events
     socket.on('robot-speech-start', async (callback) => {
       const success = await robot.onSpeechStart();
       if (callback) callback({ success });
@@ -1144,19 +1075,16 @@ export function createMindServer(port = 8080) {
       socket.emit('robot-speech-end-result', { success });
     });
 
-    // Trigger external RL
     socket.on('robot-external-rl', async ({ taskType, params }, callback) => {
       const result = await robot.triggerExternalRL(taskType, params || {});
       if (callback) callback(result);
       socket.emit('robot-external-rl-result', result);
 
-      // Broadcast lock change if successful
       if (result.success) {
         io.emit('robot-lock-changed', robot.getLockStatus());
       }
     });
 
-    // Robot status
     socket.on('robot-status', async (callback) => {
       try {
         const status = await robot.getStatus();
@@ -1169,7 +1097,6 @@ export function createMindServer(port = 8080) {
       }
     });
 
-    // State sync
     socket.on('robot-sync', async (callback) => {
       try {
         await robot.syncState();
@@ -1184,9 +1111,10 @@ export function createMindServer(port = 8080) {
     });
   });
 
-  server.listen(port, 'localhost', () => {
-    console.log(`MindServer running on port ${port}`);
-    console.log(`🤖 Robot REST API: http://localhost:${port}/robot/*`);
+  server.listen(port, host, () => {
+    console.log(`MindServer running on ${host}:${port}`);
+    console.log(`🤖 Robot REST API: http://${host}:${port}/robot/*`);
+    console.log(`🤖 Robot target(baseUrl): ${robot.baseUrl}`);
   });
 
   return server;
