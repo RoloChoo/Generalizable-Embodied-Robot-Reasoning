@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <signal.h>   // ✅ SIGPIPE 방지용
+#include <signal.h>
 
 #include "Walk.hpp"
 #include <webots/LED.hpp>
@@ -175,9 +175,12 @@ static bool jointUpdated[NMOTORS] = {false};
 
 struct MotionCommand {
   int page;
+  int returnPage;   // 0 = 마지막 자세 유지
 };
+
 static queue<MotionCommand> motionQueue;
 static int currentMotionPage = 0;
+static int currentMotionReturnPage = 0;
 static double motionStartTime = 0.0;
 static double motionDuration = 0.0;
 
@@ -196,22 +199,23 @@ static double getMotionDuration(int page) {
     case 1:  return 2.0;
     case 2:  return 2.0;
     case 3:  return 2.0;
-    case 4:  return 2.0;
+    case 4:  return 2.2;
     case 6:  return 3.0;
     case 9:  return 2.5;
     case 10: return 3.0;
     case 11: return 3.0;
-    case 12: return 3.0;
-    case 13: return 3.0;
-    case 15: return 2.0;
+    case 12: return 2.6; // right kick
+    case 13: return 2.6; // left kick
+    case 15: return 2.2; // sit down
     case 16: return 2.0;
-    case 23: return 2.5;
-    case 24: return 3.0;
-    case 27: return 2.5;
+    case 23: return 2.0; // yes/go
+    case 24: return 3.0; // wow
+    case 27: return 2.4; // oops
     case 29: return 3.0;
     case 31: return 3.0;
-    case 38: return 2.5;
-    case 54: return 3.0;
+    case 38: return 4.0; // bye-bye start page
+    case 41: return 8.0; // intro start page
+    case 54: return 6.0; // clap please start page
     case 57: return 3.0;
     case 70: return 3.0;
     case 71: return 3.0;
@@ -219,6 +223,27 @@ static double getMotionDuration(int page) {
     case 91: return 3.0;
     default: return 3.0;
   }
+}
+
+static int getMotionReturnPage(int page) {
+  switch (page) {
+    case 1:   // stand/init
+    case 9:   // walkready
+    case 15:  // sit
+      return 0;   // 자세 유지
+    case 12:  // kick right
+    case 13:  // kick left
+      return 9;   // 킥 후 walkready
+    default:
+      return 1;   // 나머지는 기본 standing(init)으로 복귀
+  }
+}
+
+static void queueMotionPageEx(int page, int returnPage = 1) {
+  MotionCommand cmd;
+  cmd.page = page;
+  cmd.returnPage = returnPage;
+  motionQueue.push(cmd);
 }
 
 // ✅ send()가 끊겨도 SIGPIPE로 프로세스 죽는 거 막고,
@@ -288,12 +313,18 @@ char* load_html() {
 
     "<div class='card'><h3>Motions</h3>"
     "<div class='row'>"
-    "<button class='p' onclick='motion(2)'>Nod Yes</button>"
-    "<button class='p' onclick='motion(3)'>Shake No</button>"
-    "<button class='p' onclick='motion(4)'>Hi</button>"
-    "<button class='p' onclick='motion(24)'>Applaud</button>"
-    "<button class='p' onclick='motion(38)'>Wave</button>"
-    "<button class='p' onclick='motion(31)'>Stretch</button>"
+    "<button class='p' onclick='motion(4)'>Greet</button>"
+    "<button class='p' onclick='motion(12)'>Right Kick</button>"
+    "<button class='p' onclick='motion(13)'>Left Kick</button>"
+    "<button class='p' onclick='motion(15)'>Sit</button>"
+    "<button class='p' onclick='motion(1)'>Stand</button>"
+    "<button class='p' onclick='motion(23)'>Yes / Go</button>"
+    "<button class='p' onclick='motion(24)'>Wow</button>"
+    "<button class='p' onclick='motion(27)'>Oops</button>"
+    "<button class='p' onclick='motion(38)'>Bye Bye</button>"
+    "<button class='p' onclick='motion(41)'>Intro</button>"
+    "<button class='p' onclick='motion(54)'>Clap</button>"
+    "<button class='o' onclick=\"cmd('motion_showcase')\">Showcase</button>"
     "</div></div>"
 
     "<div class='card'><h3>LED</h3>"
@@ -310,7 +341,7 @@ char* load_html() {
     "function sendVector(){var x=(document.getElementById('vx').value/100).toFixed(2);var y=(document.getElementById('vy').value/100).toFixed(2);var a=(document.getElementById('va').value/100).toFixed(2);fetch('/?command=set_walk&x='+x+'&y='+y+'&a='+a).catch(()=>{})}"
     "function setYaw(v){fetch('/?command=set_yaw&yaw='+v).catch(()=>{})}"
     "function refreshCam(){var img=document.getElementById('cam');if(img) img.src='/camera?t='+Date.now();}"
-    "setInterval(refreshCam, 250);"  // ✅ 200ms→250ms 약간 완화
+    "setInterval(refreshCam, 250);"
     "show();"
     "</script></body></html>";
 
@@ -350,16 +381,9 @@ static void sendStatusJson(int client) {
   sendText(client, "application/json", body);
 }
 
-static void queueMotionPage(int page) {
-  MotionCommand cmd;
-  cmd.page = page;
-  motionQueue.push(cmd);
-}
-
 void* server(void* arg) {
   (void)arg;
 
-  // ✅ 브라우저가 연결 끊어도 SIGPIPE로 프로세스 죽지 않게
   signal(SIGPIPE, SIG_IGN);
 
   int s = socket(AF_INET, SOCK_STREAM, 0);
@@ -410,7 +434,6 @@ void* server(void* arg) {
       continue;
     }
 
-    // health/status는 빠르게 응답
     if (strstr(get_line, "command=health")) {
       sendText(client, "text/plain", "OK");
       close(client);
@@ -477,7 +500,6 @@ void* server(void* arg) {
       continue;
     }
 
-    // --- 명령 파싱/상태 업데이트 ---
     pthread_mutex_lock(&stateMutex);
 
     if (strstr(get_line, "command=walk_start")) {
@@ -567,11 +589,23 @@ void* server(void* arg) {
     else if (strstr(get_line, "command=blink_toggle") || strstr(get_line, "command=led_blink_toggle")) {
       shouldToggleBlink = true;
     }
+    else if (strstr(get_line, "command=motion_showcase")) {
+      if (isWalking) shouldStopWalk = true;
+
+      queueMotionPageEx(4, 0);   // greet
+      queueMotionPageEx(23, 0);  // yes/go
+      queueMotionPageEx(24, 0);  // wow
+      queueMotionPageEx(38, 0);  // bye-bye
+      queueMotionPageEx(54, 1);  // clap -> 끝나면 standing으로 복귀
+
+      printf("Queued motion showcase\n");
+    }
     else if (strstr(get_line, "motion=")) {
       int page = 0;
       if (readQueryInt(get_line, "motion=", &page) && page > 0) {
-        queueMotionPage(page);
-        printf("Queued motion page: %d\n", page);
+        if (isWalking) shouldStopWalk = true;
+        queueMotionPageEx(page, getMotionReturnPage(page));
+        printf("Queued motion page: %d (return=%d)\n", page, getMotionReturnPage(page));
       }
     }
     else if (strstr(get_line, "command=set_joint")) {
@@ -604,14 +638,12 @@ void* server(void* arg) {
 
     pthread_mutex_unlock(&stateMutex);
 
-    // ✅ /?command=... /?motion=... 요청이면 HTML 말고 OK만
     if (strstr(get_line, "GET /?")) {
       sendText(client, "text/plain", "OK");
       close(client);
       continue;
     }
 
-    // 루트(/) 요청일 때만 HTML 응답
     char* response = load_html();
     sendAll(client, response, strlen(response));
     free(response);
@@ -626,10 +658,8 @@ Walk::Walk(): Robot() {
   mTimeStep = getBasicTimeStep();
   std::cerr << "[INFO] Controller started. TimeStep=" << mTimeStep << "\n";
 
-  // ---- Camera init ----
   mCamera = getCamera("Camera");
   if (mCamera) {
-    // ✅ camera sampling 느리게 (부하 감소)
     mCamera->enable(6 * mTimeStep);
     g_cameraWidth = mCamera->getWidth();
     g_cameraHeight = mCamera->getHeight();
@@ -777,14 +807,12 @@ void Walk::run() {
 
   bool gaitStarted = false;
 
-  // ✅ 카메라 인코딩 과부하 방지용 (warmup + throttle)
   int camWarmup = 10;
   double lastCamEnc = 0.0;
 
   while (true) {
     checkIfFallen();
 
-    // ---- 카메라 프레임 -> 최신 JPEG 갱신 (최대 ~8fps) ----
     if (mCamera) {
       double t = getTime();
       if (camWarmup > 0) {
@@ -824,21 +852,27 @@ void Walk::run() {
     if (!motionQueue.empty() && !isWalking && !motionPlaying) {
       MotionCommand cmd = motionQueue.front();
       motionQueue.pop();
+
       mMotionManager->playPage(cmd.page, false);
       currentMotionPage = cmd.page;
+      currentMotionReturnPage = cmd.returnPage;
       motionStartTime = now;
       motionDuration = getMotionDuration(cmd.page);
       motionPlaying = true;
     }
 
     if (!motionPlaying && currentMotionPage != 0) {
-      if (currentMotionPage != 1 && !isWalking) {
-        mMotionManager->playPage(1, false);
-        currentMotionPage = 1;
+      if (currentMotionReturnPage > 0 &&
+          currentMotionPage != currentMotionReturnPage &&
+          !isWalking) {
+        mMotionManager->playPage(currentMotionReturnPage, false);
+        currentMotionPage = currentMotionReturnPage;
         motionStartTime = now;
-        motionDuration = 2.0;
+        motionDuration = getMotionDuration(currentMotionReturnPage);
+        currentMotionReturnPage = 0;
       } else {
         currentMotionPage = 0;
+        currentMotionReturnPage = 0;
       }
     }
 
