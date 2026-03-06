@@ -1,655 +1,895 @@
-// p - 목/머리 관절 제어 개선 (비대칭 한계 반영) + 배치 처리 + NaN 방어 강화
-// C++98 호환 버전 (nullptr → NULL, std::isfinite → 자체 구현)
+// walk.cpp
 
-#include "walk.hpp"
-
-#include <webots/Robot.hpp>
-#include <webots/Motor.hpp>
-#include <webots/Camera.hpp>
-#include <webots/LED.hpp>
-#include <webots/Accelerometer.hpp>
-#include <webots/Gyro.hpp>
-
-#include <DARwInOPVisionManager.hpp>
-#include <DARwInOPMotionManager.hpp>
-#include <DARwInOPGaitManager.hpp>
-
-// ===== OpenCV 2.4.13 =====
-#include <opencv2/core/core.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/highgui/highgui.hpp>
-
+#include <stdio.h>
+#include <string.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <csignal>
-#include <cstdlib>
-#include <cstring>
-#include <cmath>
-#include <cstdio>
-#include <cctype>   // isspace, tolower
-#include <cerrno>   // errno
-#include <limits>   // numeric_limits
+#include <stdlib.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <signal.h>   // ✅ SIGPIPE 방지용
+
+#include "Walk.hpp"
+#include <webots/LED.hpp>
+#include <webots/Accelerometer.hpp>
+#include <webots/Gyro.hpp>
+#include <webots/Motor.hpp>
+#include <webots/Camera.hpp>
+
+#include <DARwInOPMotionManager.hpp>
+#include <DARwInOPGaitManager.hpp>
+
+// OpenCV 2.4.13
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
+
 #include <vector>
+
+#include <cmath>
+#include <iostream>
+#include <fstream>
+#include <string>
 #include <queue>
+#include <limits>
 
 using namespace webots;
 using namespace managers;
 using namespace std;
 using namespace cv;
 
-#define NMOTORS 20
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
-// ======================== 목/머리 관절 한계값 정의 ========================
-#define NECK_MOTOR_INDEX 18
-#define HEAD_MOTOR_INDEX 19
-#define NECK_LIMIT 1.5708  // ±90도 (Java 컨트롤러와 동일)
-#define HEAD_LIMIT 0.5236  // ±30도 (참고용)
-
-// ======================== C++98 호환: isfinite 자체 구현 ========================
 static inline bool isFiniteD(double v) {
-    // NaN 체크: v != v
-    // Inf 체크: numeric_limits로 비교
-    return (v == v) && 
-           (v !=  std::numeric_limits<double>::infinity()) &&
-           (v != -std::numeric_limits<double>::infinity());
+  return (v == v) &&
+         (v !=  std::numeric_limits<double>::infinity()) &&
+         (v != -std::numeric_limits<double>::infinity());
 }
 
-// ------------------------ 유틸리티 ------------------------
-static void signal_handler(int sig) {
-    (void)sig;
-    printf("\n[EXIT]\n");
-    exit(0);
+static inline double clampd(double v, double mn, double mx) {
+  if (!isFiniteD(v)) return 0.0;
+  if (mn > mx) return v;
+  return (v < mn) ? mn : ((v > mx) ? mx : v);
 }
 
-// NaN-safe clamp (C++98 호환)
-static inline double clampd(double v, double lo, double hi) {
-    // NaN/Inf는 caller가 처리하도록 그대로 반환
-    if (!isFiniteD(v)) return v;
-    if (lo > hi) return v;
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
+static inline double deadZone(double v, double dz) {
+  return fabs(v) < dz ? 0.0 : v;
 }
 
-// 문자열 trim
-static inline void trimInPlace(char* s) {
-    if (!s) return;
-
-    // leading trim
-    char* p = s;
-    while (*p && std::isspace((unsigned char)*p)) p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-
-    // trailing trim
-    size_t n = strlen(s);
-    while (n > 0 && std::isspace((unsigned char)s[n - 1])) {
-        s[n - 1] = '\0';
-        n--;
-    }
+static inline bool parseFiniteDoubleToken(const char* s, double* out) {
+  if (!s || !out) return false;
+  errno = 0;
+  char* endp = NULL;
+  double v = strtod(s, &endp);
+  if (endp == s || errno == ERANGE || !isFiniteD(v)) return false;
+  *out = v;
+  return true;
 }
 
-// NaN/Inf 토큰 검사
-static inline bool isNanToken(const char* s) {
-    if (!s) return true;
-    // case-insensitive compare for nan/inf
-    char buf[32];
-    size_t n = strlen(s);
-    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
-    for (size_t i = 0; i < n; i++) buf[i] = (char)std::tolower((unsigned char)s[i]);
-    buf[n] = '\0';
-
-    // "", "nan", "+nan", "-nan", "inf", "+inf", "-inf"
-    if (buf[0] == '\0') return true;
-    if (strcmp(buf, "nan") == 0 || strcmp(buf, "+nan") == 0 || strcmp(buf, "-nan") == 0) return true;
-    if (strcmp(buf, "inf") == 0 || strcmp(buf, "+inf") == 0 || strcmp(buf, "-inf") == 0) return true;
-    return false;
+static inline bool readQueryValue(const char* line, const char* key, char* out, size_t outSize) {
+  if (!line || !key || !out || outSize == 0) return false;
+  const char* p = strstr(line, key);
+  if (!p) return false;
+  p += strlen(key);
+  size_t i = 0;
+  while (p[i] && p[i] != '&' && p[i] != ' ' && i + 1 < outSize) {
+    out[i] = p[i];
+    ++i;
+  }
+  out[i] = '\0';
+  return i > 0;
 }
 
-// 안전한 double 파싱 (C++98 호환: nullptr → NULL)
-static inline bool parseFiniteDouble(const char* s, double* out) {
-    if (!s || !out) return false;
-    errno = 0;
-    char* endp = NULL;  // ✅ C++98: nullptr → NULL
-    double v = strtod(s, &endp);
-    if (endp == s) return false;          // no conversion
-    if (errno == ERANGE) return false;    // overflow/underflow
-    if (!isFiniteD(v)) return false;      // ✅ C++98: std::isfinite → isFiniteD
-    *out = v;
-    return true;
+static inline bool readQueryDouble(const char* line, const char* key, double* out) {
+  char buf[64];
+  if (!readQueryValue(line, key, buf, sizeof(buf))) return false;
+  return parseFiniteDoubleToken(buf, out);
 }
+
+static inline bool readQueryInt(const char* line, const char* key, int* out) {
+  char buf[64];
+  if (!readQueryValue(line, key, buf, sizeof(buf))) return false;
+  *out = atoi(buf);
+  return true;
+}
+
+static inline double convertYawToNeckAngle(double yawDeg) {
+  double robotBaseYaw = 180.0;
+  double rel = yawDeg - robotBaseYaw;
+  while (rel > 180.0) rel -= 360.0;
+  while (rel < -180.0) rel += 360.0;
+  return -rel * M_PI / 180.0;
+}
+
+static const int NECK_INDEX = 18;
+static const int HEAD_INDEX = 19;
+static const double MAX_X_AMP = 1.0;
+static const double MAX_Y_AMP = 0.8;
+static const double MAX_A_AMP = 0.7;
+static const double YAW_FILTER_ALPHA = 0.05;
+static const double JOINT_FILTER_ALPHA = 0.15;
+
+int gain = 128;
+bool isWalking = false;
+bool shouldStartWalk = false;
+bool shouldStopWalk = false;
+double xAmplitude = 0.0;
+double yAmplitude = 0.0;
+double aAmplitude = 0.0;
+
+bool eyeLedOn = true;
+bool headLedOn = true;
+bool shouldToggleEyeLed = false;
+bool shouldToggleHeadLed = false;
+int eyeLedColor = 0x00FF00;
+int headLedColor = 0xFF0000;
+
+bool blinkMode = false;
+bool shouldToggleBlink = false;
+double lastBlinkTime = 0.0;
+bool blinkState = true;
+
+double webYawDeg = -1.0;
+double targetYawRad = 0.0;
+double filteredYawRad = 0.0;
+double prevTargetYawRad = 0.0;
 
 // ------------------------ 카메라 JPEG 공유 ------------------------
 static pthread_mutex_t g_camera_lock = PTHREAD_MUTEX_INITIALIZER;
-static vector<uchar> g_latest_jpeg;
+static std::vector<uchar> g_latest_jpeg;
 static bool g_has_image = false;
+static int g_cameraWidth = 0;
+static int g_cameraHeight = 0;
 
 static void encodeToJPEG(const unsigned char* image, int width, int height) {
-    if (!image) return;
-    pthread_mutex_lock(&g_camera_lock);
-    try {
-        Mat bgra(height, width, CV_8UC4, const_cast<unsigned char*>(image));
-        Mat bgr;
-        cvtColor(bgra, bgr, CV_BGRA2BGR);
-        vector<int> params;
-        params.push_back(CV_IMWRITE_JPEG_QUALITY);
-        params.push_back(85);
-        imencode(".jpg", bgr, g_latest_jpeg, params);
-        g_has_image = true;
-    } catch (const cv::Exception& e) {
-        fprintf(stderr, "❌ JPEG encode: %s\n", e.what());
-    }
-    pthread_mutex_unlock(&g_camera_lock);
+  if (!image || width <= 0 || height <= 0)
+    return;
+
+  pthread_mutex_lock(&g_camera_lock);
+  try {
+    Mat bgra(height, width, CV_8UC4, const_cast<unsigned char*>(image));
+    Mat bgr;
+    cvtColor(bgra, bgr, CV_BGRA2BGR);
+
+    std::vector<int> params;
+    params.push_back(CV_IMWRITE_JPEG_QUALITY);
+    params.push_back(80);
+
+    imencode(".jpg", bgr, g_latest_jpeg, params);
+    g_has_image = true;
+  } catch (const cv::Exception& e) {
+    fprintf(stderr, "❌ JPEG encode error: %s\n", e.what());
+  }
+  pthread_mutex_unlock(&g_camera_lock);
 }
 
-// ------------------------ 전역 상태 변수 ------------------------
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-
-// Blink (눈 깜빡임)
-static bool    g_blinkMode   = false;
-static bool    g_blinkState  = true;
-static double g_lastBlinkT  = 0.0;
-
-// 걷기
-static bool    g_isWalking     = false;
-static bool    g_startWalk     = false;
-static bool    g_stopWalk      = false;
-static double g_xAmplitude    = 0.0;
-static double g_yAmplitude    = 0.0;
-static double g_aAmplitude    = 0.0;
-
-// 모션
-struct MotionCommand {
-    int page;
-    int motorId;
-    double position;
-    double velocity;
-};
-static queue<MotionCommand> g_motionQueue;
-
-static int     g_currentMotion   = 0;
-static double g_motionStartTime = 0.0;
-static double g_motionDuration  = 0.0;
-
-// 관절 제어 (외부 명령용)
-static double g_targetPositions[NMOTORS] = {0};
-static bool    g_jointUpdated[NMOTORS] = {false};
-
-// 필터 (부드러운 움직임)
-static const double FILTER_ALPHA = 0.15;
-static double g_filteredPositions[NMOTORS] = {0};
-
-// 모터 정보 (Webots에서 읽어옴)
 static double minMotorPositions[NMOTORS];
 static double maxMotorPositions[NMOTORS];
+static double targetPositions[NMOTORS] = {0};
+static double filteredPositions[NMOTORS] = {0};
+static bool jointUpdated[NMOTORS] = {false};
+
+struct MotionCommand {
+  int page;
+};
+static queue<MotionCommand> motionQueue;
+static int currentMotionPage = 0;
+static double motionStartTime = 0.0;
+static double motionDuration = 0.0;
+
+pthread_mutex_t stateMutex = PTHREAD_MUTEX_INITIALIZER;
+
 static const char *motorNames[NMOTORS] = {
-    "ShoulderR","ShoulderL","ArmUpperR","ArmUpperL",
-    "ArmLowerR","ArmLowerL","PelvYR","PelvYL",
-    "PelvR","PelvL","LegUpperR","LegUpperL",
-    "LegLowerR","LegLowerL","AnkleR","AnkleL",
-    "FootR","FootL","Neck","Head"
+  "ShoulderR","ShoulderL","ArmUpperR","ArmUpperL",
+  "ArmLowerR","ArmLowerL","PelvYR","PelvYL",
+  "PelvR","PelvL","LegUpperR","LegUpperL",
+  "LegLowerR","LegLowerL","AnkleR","AnkleL",
+  "FootR","FootL","Neck","Head"
 };
 
-// ------------------------ 모션 길이 테이블 ------------------------
 static double getMotionDuration(int page) {
-    switch(page) {
-        case 1:  return 2.0;
-        case 2:  return 2.0;
-        case 3:  return 2.0;
-        case 4:  return 2.0;
-        case 6:  return 3.0;
-        case 9:  return 2.5;
-        case 10: return 3.0;
-        case 11: return 3.0;
-        case 12: return 3.0;
-        case 13: return 3.0;
-        case 15: return 2.0;
-        case 16: return 2.0;
-        case 23: return 2.5;
-        case 24: return 3.0;
-        case 27: return 2.5;
-        case 29: return 3.0;
-        case 31: return 3.0;
-        case 38: return 2.5;
-        case 54: return 3.0;
-        case 57: return 3.0;
-        case 70: return 3.0;
-        case 71: return 3.0;
-        case 90: return 3.0;
-        case 91: return 3.0;
-        default: return 3.0;
-    }
+  switch(page) {
+    case 1:  return 2.0;
+    case 2:  return 2.0;
+    case 3:  return 2.0;
+    case 4:  return 2.0;
+    case 6:  return 3.0;
+    case 9:  return 2.5;
+    case 10: return 3.0;
+    case 11: return 3.0;
+    case 12: return 3.0;
+    case 13: return 3.0;
+    case 15: return 2.0;
+    case 16: return 2.0;
+    case 23: return 2.5;
+    case 24: return 3.0;
+    case 27: return 2.5;
+    case 29: return 3.0;
+    case 31: return 3.0;
+    case 38: return 2.5;
+    case 54: return 3.0;
+    case 57: return 3.0;
+    case 70: return 3.0;
+    case 71: return 3.0;
+    case 90: return 3.0;
+    case 91: return 3.0;
+    default: return 3.0;
+  }
 }
 
-// ------------------------ HTML 대시보드 ------------------------
-static const char* HTML =
-"HTTP/1.1 200 OK\r\nContent-Type:text/html;charset=utf-8\r\nConnection:close\r\n\r\n"
-"<!doctype html><html><head><meta charset='utf-8'>"
-"<title>🤖 DARwIn-OP Enhanced Control</title>"
-"<style>"
-"body{font-family:'Segoe UI',Arial;padding:20px;background:#f5f5f5;margin:0}"
-"h1{color:#2196F3;text-align:center;margin:20px 0}"
-"h2{color:#333;margin:12px 0 8px;font-size:18px}"
-".card{background:#fff;border-radius:12px;padding:18px;margin:12px 0;box-shadow:0 3px 10px rgba(0,0,0,.1)}"
-".row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}"
-"button{padding:11px 16px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500;transition:all .3s}"
-".g{background:#4CAF50;color:#fff}.b{background:#2196F3;color:#fff}"
-".o{background:#FF9800;color:#fff}.r{background:#f44336;color:#fff}"
-".p{background:#9C27B0;color:#fff}.y{background:#FFC107;color:#333}"
-".cam{max-width:640px;width:100%;border:3px solid #ddd;border-radius:10px;display:block;margin:10px auto}"
-"button:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.2)}"
-"</style>"
-"<script>"
-"function tick(){var img=document.getElementById('cam');if(img)img.src='/camera?t='+Date.now()}"
-"setInterval(tick,200);"
-"function cmd(c){fetch('/?command='+c)}"
-"function go(p){fetch('/?motion='+p)}"
-"</script></head><body>"
-"<h1>🤖 DARwIn-OP Enhanced Controller</h1>"
-
-"<div class='card'><img id='cam' class='cam' src='/camera'></div>"
-
-"<div class='card'><h2>⚙️ Controls</h2>"
-"<div class='row'>"
-"<button class='g' onclick=\"cmd('walk_start')\">▶ Walk</button>"
-"<button class='r' onclick=\"cmd('walk_stop')\">⏹ Stop</button>"
-"<button class='y' onclick=\"cmd('blink_toggle')\">👁️ Toggle Blink</button>"
-"</div></div>"
-
-"<div class='card'><h2>🙋 Basic Motions</h2>"
-"<div class='row'>"
-"<button class='b' onclick='go(1)'>Stand (1)</button>"
-"<button class='b' onclick='go(2)'>Nod Yes (2)</button>"
-"<button class='b' onclick='go(3)'>Shake No (3)</button>"
-"<button class='b' onclick='go(4)'>Hi/Tilt (4)</button>"
-"</div></div>"
-
-"<div class='card'><h2>🗣️ Talk & Prep</h2>"
-"<div class='row'>"
-"<button class='o' onclick='go(6)'>Talk 1 (6)</button>"
-"<button class='o' onclick='go(29)'>Talk 2 (29)</button>"
-"<button class='o' onclick='go(9)'>Walk Ready (9)</button>"
-"</div></div>"
-
-"<div class='card'><h2>↕️ Get Up / Sit / Stand</h2>"
-"<div class='row'>"
-"<button class='r' onclick='go(10)'>Face Up (10)</button>"
-"<button class='r' onclick='go(11)'>Back Up (11)</button>"
-"<button class='r' onclick='go(15)'>Sit Down (15)</button>"
-"<button class='r' onclick='go(16)'>Stand Up (16)</button>"
-"</div></div>"
-
-"<div class='card'><h2>🎭 Gestures</h2>"
-"<div class='row'>"
-"<button class='p' onclick='go(23)'>Arm Yes (23)</button>"
-"<button class='p' onclick='go(24)'>Applaud (24)</button>"
-"<button class='p' onclick='go(27)'>Arm+Head Yes (27)</button>"
-"<button class='p' onclick='go(31)'>Stretch (31)</button>"
-"<button class='p' onclick='go(38)'>Wave Hand (38)</button>"
-"<button class='p' onclick='go(54)'>Applaud+ (54)</button>"
-"<button class='p' onclick='go(57)'>Applaud++ (57)</button>"
-"</div></div>"
-
-"<div class='card'><h2>⚽ Soccer Moves</h2>"
-"<div class='row'>"
-"<button class='o' onclick='go(12)'>Right Kick (12)</button>"
-"<button class='o' onclick='go(13)'>Left Kick (13)</button>"
-"<button class='o' onclick='go(70)'>Right Pass (70)</button>"
-"<button class='o' onclick='go(71)'>Left Pass (71)</button>"
-"</div></div>"
-
-"<div class='card'><h2>🛌 Lie Down</h2>"
-"<div class='row'>"
-"<button class='g' onclick='go(90)'>Lie Front (90)</button>"
-"<button class='g' onclick='go(91)'>Lie Back (91)</button>"
-"</div></div>"
-
-"</body></html>";
-
-// ------------------------ HTTP 서버 ------------------------
-static void* http_server(void* arg) {
-    (void)arg;
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) return NULL;
-    
-    int opt = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
-    sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(8080);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    
-    if (bind(s, (sockaddr*)&addr, sizeof(addr)) < 0) return NULL;
-    listen(s, 8);
-    printf("✅ HTTP Server: http://0.0.0.0:8080\n");
-
-    while (true) {
-        sockaddr_in caddr;
-        socklen_t clen = sizeof(caddr);
-        int c = accept(s, (sockaddr*)&caddr, &clen);
-        if (c < 0) continue;
-
-        char buf[2048];
-        ssize_t n = recv(c, buf, sizeof(buf)-1, 0);
-        if (n <= 0) { close(c); continue; }
-        buf[n] = '\0';
-        
-        char* line = strtok(buf, "\r\n");
-        if (!line) { close(c); continue; }
-
-        if (strstr(line, "GET /camera")) {
-            pthread_mutex_lock(&g_camera_lock);
-            if (g_has_image && !g_latest_jpeg.empty()) {
-                char h[200]; snprintf(h,sizeof(h),"HTTP/1.1 200 OK\r\nContent-Type:image/jpeg\r\nContent-Length:%zu\r\n\r\n",g_latest_jpeg.size());
-                send(c, h, strlen(h), 0);
-                send(c, &g_latest_jpeg[0], g_latest_jpeg.size(), 0);
-            } else {
-                send(c, "HTTP/1.1 503\r\n\r\n", 14, 0);
-            }
-            pthread_mutex_unlock(&g_camera_lock);
-            close(c);
-            continue;
-        }
-
-        pthread_mutex_lock(&g_lock);
-        if (strstr(line, "command=walk_start")) g_startWalk = true;
-        else if (strstr(line, "command=walk_stop")) g_stopWalk = true;
-        else if (strstr(line, "command=blink_toggle")) {
-            g_blinkMode = !g_blinkMode;
-            printf("👁️ Blink Mode: %s\n", g_blinkMode ? "ON" : "OFF");
-        }
-        else if (strstr(line, "motion=")) {
-            char* p = strstr(line, "motion=");
-            if (p) {
-                MotionCommand cmd = {atoi(p+7), -1, 0, 0};
-                g_motionQueue.push(cmd);
-                printf("🎬 Motion queued: page %d\n", cmd.page);
-            }
-        }
-        // ========== 🆕 배치 처리 (set_joints) - NaN 방어 강화 ==========
-        else if (strstr(line, "command=set_joints")) {
-            char* vPos = strstr(line, "v=");
-            if (vPos) {
-                char values[1024];
-                strncpy(values, vPos + 2, sizeof(values) - 1);
-                values[sizeof(values) - 1] = '\0';
-
-                // URL 끝 표시(&, 공백, HTTP) 찾아서 자르기
-                char* end = strchr(values, '&');
-                if (end) *end = '\0';
-                end = strchr(values, ' ');
-                if (end) *end = '\0';
-
-                char* token = strtok(values, ",");
-                int idx = 0;
-                int updated = 0;
-
-                while (token != NULL && idx < NMOTORS) {
-                    trimInPlace(token);
-
-                    // "nan"/"NaN"/공백/inf 등은 모두 스킵
-                    if (!isNanToken(token)) {
-                        double val;
-                        if (parseFiniteDouble(token, &val)) {
-                            double safe;
-
-                            if (idx == NECK_MOTOR_INDEX) {
-                                safe = clampd(val, -NECK_LIMIT, NECK_LIMIT);
-                            } else if (idx == HEAD_MOTOR_INDEX) {
-                                safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
-                            } else {
-                                safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
-                            }
-
-                            // clamp 결과도 NaN이면 스킵(최종 방어)
-                            if (isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
-                                g_targetPositions[idx] = safe;
-                                g_jointUpdated[idx] = true;
-                                updated++;
-                            }
-                        }
-                    }
-
-                    token = strtok(NULL, ",");
-                    idx++;
-                }
-                printf("📦 Batch update: %d/%d joints\n", updated, idx);
-            }
-        }
-        // ========== 단일 관절 처리 (set_joint) - NaN 방어 강화 ==========
-        else if (strstr(line, "command=set_joint")) {
-            char* iPos = strstr(line, "index=");
-            char* vPos = strstr(line, "value=");
-            if (iPos && vPos) {
-                int idx = atoi(iPos + 6);
-
-                // value 부분을 안전하게 잘라서 파싱(& 또는 공백에서 종료)
-                char vbuf[64];
-                strncpy(vbuf, vPos + 6, sizeof(vbuf) - 1);
-                vbuf[sizeof(vbuf) - 1] = '\0';
-                char* end = strchr(vbuf, '&');
-                if (end) *end = '\0';
-                end = strchr(vbuf, ' ');
-                if (end) *end = '\0';
-                trimInPlace(vbuf);
-
-                if (idx >= 0 && idx < NMOTORS && !isNanToken(vbuf)) {
-                    double val;
-                    if (parseFiniteDouble(vbuf, &val)) {
-                        double safe;
-                        if (idx == NECK_MOTOR_INDEX) {
-                            safe = clampd(val, -NECK_LIMIT, NECK_LIMIT);
-                        } else if (idx == HEAD_MOTOR_INDEX) {
-                            safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
-                        } else {
-                            safe = clampd(val, minMotorPositions[idx], maxMotorPositions[idx]);
-                        }
-
-                        if (isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
-                            g_targetPositions[idx] = safe;
-                            g_jointUpdated[idx] = true;
-                        }
-                    }
-                }
-            }
-        }
-        else if (strstr(line, "command=set_walk")) {
-            char* f = strstr(line, "f="); char* b = strstr(line, "b=");
-            char* l = strstr(line, "l="); char* r = strstr(line, "r=");
-            bool fw = f && atoi(f+2); bool bw = b && atoi(b+2);
-            bool lt = l && atoi(l+2); bool rt = r && atoi(r+2);
-            
-            g_xAmplitude = (fw && !bw) ? 1.0 : ((bw && !fw) ? -1.0 : 0.0);
-            g_aAmplitude = (lt && !rt) ? 0.5 : ((rt && !lt) ? -0.5 : 0.0);
-            
-            if ((fw||bw||lt||rt) && !g_isWalking) g_startWalk = true;
-            else if (!(fw||bw||lt||rt) && g_isWalking) g_stopWalk = true;
-        }
-        pthread_mutex_unlock(&g_lock);
-
-        if (strstr(line, "command=")) send(c, "HTTP/1.1 200 OK\r\n\r\nOK", 19, 0);
-        else send(c, HTML, strlen(HTML), 0);
-        close(c);
+// ✅ send()가 끊겨도 SIGPIPE로 프로세스 죽는 거 막고,
+// ✅ 부분전송도 안전하게 끝까지 보내기
+static bool sendAll(int sock, const void* data, size_t len) {
+  const char* p = (const char*)data;
+  while (len > 0) {
+    ssize_t n = send(sock, p, len, 0);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return false;
     }
+    if (n == 0) return false;
+    p += n;
+    len -= (size_t)n;
+  }
+  return true;
+}
+
+char* load_html() {
+  static const char html[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html\r\n"
+    "Access-Control-Allow-Origin: *\r\n"
+    "Connection: close\r\n\r\n"
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>DARwIn-OP Full Control</title>"
+    "<style>body{font-family:Arial,sans-serif;background:#f4f4f4;margin:20px}"
+    ".card{background:#fff;padding:16px;border-radius:10px;margin:12px 0;box-shadow:0 2px 6px rgba(0,0,0,.08)}"
+    "button{padding:10px 14px;margin:4px;border:none;border-radius:6px;cursor:pointer;font-weight:bold}"
+    ".g{background:#4CAF50;color:white}.r{background:#f44336;color:white}.b{background:#2196F3;color:white}.p{background:#9C27B0;color:white}.o{background:#FF9800;color:white}"
+    "input[type=range]{width:220px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}</style>"
+    "</head><body><h1>🤖 DARwIn-OP Full Controller</h1>"
+
+    "<div class='card'><h3>📷 Camera Preview</h3>"
+    "<img id='cam' src='/camera' style='max-width:640px;width:100%;border:2px solid #333;border-radius:8px;'>"
+    "<div style='margin-top:8px'>"
+    "<button class='b' onclick='refreshCam()'>🔄 Refresh Camera</button>"
+    "</div></div>"
+
+    "<div class='card'><h3>Walk</h3>"
+    "<div class='row'>"
+    "<button class='g' onclick=\"cmd('walk_start')\">Start</button>"
+    "<button class='r' onclick=\"cmd('walk_stop')\">Stop</button>"
+    "<button class='b' onclick=\"cmd('move_forward')\">Forward</button>"
+    "<button class='b' onclick=\"cmd('move_backward')\">Backward</button>"
+    "<button class='b' onclick=\"cmd('strafe_left')\">Strafe Left</button>"
+    "<button class='b' onclick=\"cmd('strafe_right')\">Strafe Right</button>"
+    "<button class='o' onclick=\"cmd('turn_left')\">Turn Left</button>"
+    "<button class='o' onclick=\"cmd('turn_right')\">Turn Right</button>"
+    "<button class='r' onclick=\"cmd('move_stop')\">Vector Stop</button>"
+    "</div></div>"
+
+    "<div class='card'><h3>Vector Control</h3>"
+    "<div class='row'>"
+    "<label>X <input id='vx' type='range' min='-100' max='100' value='0' oninput='show()'></label>"
+    "<label>Y <input id='vy' type='range' min='-80' max='80' value='0' oninput='show()'></label>"
+    "<label>A <input id='va' type='range' min='-70' max='70' value='0' oninput='show()'></label>"
+    "<button class='g' onclick='sendVector()'>Apply Vector</button>"
+    "</div><div id='vec'>x=0 y=0 a=0</div></div>"
+
+    "<div class='card'><h3>Yaw / Head</h3>"
+    "<div class='row'>"
+    "<label>Yaw <input id='yaw' type='range' min='0' max='360' value='180' oninput='setYaw(this.value)'></label>"
+    "<button class='b' onclick='setYaw(180)'>Center</button>"
+    "<button class='r' onclick=\"cmd('yaw_off')\">Yaw Off</button>"
+    "</div></div>"
+
+    "<div class='card'><h3>Motions</h3>"
+    "<div class='row'>"
+    "<button class='p' onclick='motion(2)'>Nod Yes</button>"
+    "<button class='p' onclick='motion(3)'>Shake No</button>"
+    "<button class='p' onclick='motion(4)'>Hi</button>"
+    "<button class='p' onclick='motion(24)'>Applaud</button>"
+    "<button class='p' onclick='motion(38)'>Wave</button>"
+    "<button class='p' onclick='motion(31)'>Stretch</button>"
+    "</div></div>"
+
+    "<div class='card'><h3>LED</h3>"
+    "<div class='row'>"
+    "<button class='o' onclick=\"cmd('eye_led_toggle')\">Eye LED</button>"
+    "<button class='o' onclick=\"cmd('head_led_toggle')\">Head LED</button>"
+    "<button class='o' onclick=\"cmd('blink_toggle')\">Blink</button>"
+    "</div></div>"
+
+    "<script>"
+    "function cmd(c){fetch('/?command='+c).catch(()=>{})}"
+    "function motion(p){fetch('/?motion='+p).catch(()=>{})}"
+    "function show(){document.getElementById('vec').innerText='x='+(document.getElementById('vx').value/100).toFixed(2)+' y='+(document.getElementById('vy').value/100).toFixed(2)+' a='+(document.getElementById('va').value/100).toFixed(2)}"
+    "function sendVector(){var x=(document.getElementById('vx').value/100).toFixed(2);var y=(document.getElementById('vy').value/100).toFixed(2);var a=(document.getElementById('va').value/100).toFixed(2);fetch('/?command=set_walk&x='+x+'&y='+y+'&a='+a).catch(()=>{})}"
+    "function setYaw(v){fetch('/?command=set_yaw&yaw='+v).catch(()=>{})}"
+    "function refreshCam(){var img=document.getElementById('cam');if(img) img.src='/camera?t='+Date.now();}"
+    "setInterval(refreshCam, 250);"  // ✅ 200ms→250ms 약간 완화
+    "show();"
+    "</script></body></html>";
+
+  char* result = (char*)malloc(strlen(html) + 1);
+  strcpy(result, html);
+  return result;
+}
+
+static void sendText(int client, const char* contentType, const char* body) {
+  if (!body) body = "";
+  size_t blen = strlen(body);
+
+  char header[256];
+  snprintf(header, sizeof(header),
+           "HTTP/1.1 200 OK\r\n"
+           "Content-Type: %s\r\n"
+           "Content-Length: %zu\r\n"
+           "Access-Control-Allow-Origin: *\r\n"
+           "Connection: close\r\n\r\n",
+           contentType, blen);
+
+  sendAll(client, header, strlen(header));
+  if (blen) sendAll(client, body, blen);
+}
+
+static void sendStatusJson(int client) {
+  char body[512];
+  pthread_mutex_lock(&stateMutex);
+  snprintf(body, sizeof(body),
+           "{\"ok\":true,\"walking\":%s,\"x\":%.3f,\"y\":%.3f,\"a\":%.3f,\"blink\":%s,\"yawDeg\":%.3f,\"motion\":%d}",
+           isWalking ? "true" : "false",
+           xAmplitude, yAmplitude, aAmplitude,
+           blinkMode ? "true" : "false",
+           webYawDeg,
+           currentMotionPage);
+  pthread_mutex_unlock(&stateMutex);
+  sendText(client, "application/json", body);
+}
+
+static void queueMotionPage(int page) {
+  MotionCommand cmd;
+  cmd.page = page;
+  motionQueue.push(cmd);
+}
+
+void* server(void* arg) {
+  (void)arg;
+
+  // ✅ 브라우저가 연결 끊어도 SIGPIPE로 프로세스 죽지 않게
+  signal(SIGPIPE, SIG_IGN);
+
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s < 0) {
+    printf("Socket creation failed!\n");
     return NULL;
-}
+  }
 
-// ------------------------ RobotListener ------------------------
-RobotListener::RobotListener() : Robot() {
-    mTimeStep = getBasicTimeStep();
-    if (mTimeStep <= 0) mTimeStep = 32;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(8080);
+  addr.sin_addr.s_addr = INADDR_ANY;
 
-    mCamera = getCamera("Camera");
-    if (mCamera) mCamera->enable(2 * mTimeStep);
+  int opt = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    mEyeLED = getLED("EyeLed");
-    mHeadLED = getLED("HeadLed");
+  if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    printf("Bind failed! Port 8080 might be in use.\n");
+    close(s);
+    return NULL;
+  }
+  if (listen(s, 8) < 0) {
+    printf("Listen failed!\n");
+    close(s);
+    return NULL;
+  }
 
-    mAccelerometer = getAccelerometer("Accelerometer");
-    if (mAccelerometer) mAccelerometer->enable(mTimeStep);
-    
-    Gyro* gyro = getGyro("Gyro");
-    if (gyro) gyro->enable(mTimeStep);
+  printf("Server running on http://0.0.0.0:8080\n");
 
-    for (int i = 0; i < NMOTORS; i++) {
-        mMotors[i] = getMotor(motorNames[i]);
-        if (mMotors[i]) {
-            minMotorPositions[i] = mMotors[i]->getMinPosition();
-            maxMotorPositions[i] = mMotors[i]->getMaxPosition();
-            mMotors[i]->enablePosition(mTimeStep);
-        } else {
-            minMotorPositions[i] = -100;
-            maxMotorPositions[i] = 100;
-        }
+  while (1) {
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int client = accept(s, (struct sockaddr*)&client_addr, &client_len);
+    if (client < 0) continue;
+
+    char buf[2048];
+    ssize_t bytes_read = recv(client, buf, sizeof(buf) - 1, 0);
+    if (bytes_read <= 0) {
+      close(client);
+      continue;
     }
 
-    mMotionManager = new DARwInOPMotionManager(this);
-    mGaitManager    = new DARwInOPGaitManager(this, "config.ini");
+    buf[bytes_read] = '\0';
+    char *get_line = strtok(buf, "\r\n");
+    if (!get_line) {
+      close(client);
+      continue;
+    }
+
+    // health/status는 빠르게 응답
+    if (strstr(get_line, "command=health")) {
+      sendText(client, "text/plain", "OK");
+      close(client);
+      continue;
+    }
+
+    if (strstr(get_line, "command=status")) {
+      sendStatusJson(client);
+      close(client);
+      continue;
+    }
+
+    // ---- 카메라 JPEG ----
+    if (strstr(get_line, "GET /camera")) {
+      pthread_mutex_lock(&g_camera_lock);
+      if (g_has_image && !g_latest_jpeg.empty()) {
+        char header[256];
+        snprintf(header, sizeof(header),
+          "HTTP/1.1 200 OK\r\n"
+          "Content-Type: image/jpeg\r\n"
+          "Content-Length: %zu\r\n"
+          "Access-Control-Allow-Origin: *\r\n"
+          "Connection: close\r\n\r\n",
+          g_latest_jpeg.size());
+
+        sendAll(client, header, strlen(header));
+        sendAll(client, &g_latest_jpeg[0], g_latest_jpeg.size());
+      } else {
+        const char* err =
+          "HTTP/1.1 503 Service Unavailable\r\n"
+          "Content-Type: text/plain\r\n"
+          "Access-Control-Allow-Origin: *\r\n"
+          "Connection: close\r\n\r\n"
+          "No image";
+        sendAll(client, err, strlen(err));
+      }
+      pthread_mutex_unlock(&g_camera_lock);
+
+      close(client);
+      continue;
+    }
+
+    // ---- 카메라 상태 JSON ----
+    if (strstr(get_line, "GET /info")) {
+      char out[256];
+
+      pthread_mutex_lock(&g_camera_lock);
+      const bool has = g_has_image;
+      const size_t sz = g_latest_jpeg.size();
+      const int w = g_cameraWidth;
+      const int h = g_cameraHeight;
+      pthread_mutex_unlock(&g_camera_lock);
+
+      snprintf(out, sizeof(out),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"has_image\":%s,\"size\":%zu,\"width\":%d,\"height\":%d}",
+        has ? "true" : "false", sz, w, h);
+
+      sendAll(client, out, strlen(out));
+      close(client);
+      continue;
+    }
+
+    // --- 명령 파싱/상태 업데이트 ---
+    pthread_mutex_lock(&stateMutex);
+
+    if (strstr(get_line, "command=walk_start")) {
+      shouldStartWalk = true;
+      if (fabs(xAmplitude) < 0.001 && fabs(yAmplitude) < 0.001 && fabs(aAmplitude) < 0.001) {
+        xAmplitude = 0.35;
+      }
+      printf("Walk start\n");
+    }
+    else if (strstr(get_line, "command=walk_stop")) {
+      shouldStopWalk = true;
+      printf("Walk stop\n");
+    }
+    else if (strstr(get_line, "command=set_walk")) {
+      double x = 0.0, y = 0.0, a = 0.0;
+      bool hasAny = false;
+      if (readQueryDouble(get_line, "x=", &x)) { x = clampd(x, -MAX_X_AMP, MAX_X_AMP); hasAny = true; }
+      if (readQueryDouble(get_line, "y=", &y)) { y = clampd(y, -MAX_Y_AMP, MAX_Y_AMP); hasAny = true; }
+      if (readQueryDouble(get_line, "a=", &a)) { a = clampd(a, -MAX_A_AMP, MAX_A_AMP); hasAny = true; }
+
+      if (hasAny) {
+        xAmplitude = deadZone(x, 0.03);
+        yAmplitude = deadZone(y, 0.03);
+        aAmplitude = deadZone(a, 0.03);
+        webYawDeg = -1.0;
+
+        bool moving = fabs(xAmplitude) > 0.001 || fabs(yAmplitude) > 0.001 || fabs(aAmplitude) > 0.001;
+        if (moving && !isWalking) shouldStartWalk = true;
+        if (!moving && isWalking) shouldStopWalk = true;
+
+        printf("Set walk vector: x=%.3f y=%.3f a=%.3f\n", xAmplitude, yAmplitude, aAmplitude);
+      }
+    }
+    else if (strstr(get_line, "command=move_forward")) {
+      xAmplitude = 0.5; yAmplitude = 0.0; aAmplitude = 0.0; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Forward\n");
+    }
+    else if (strstr(get_line, "command=move_backward")) {
+      xAmplitude = -0.4; yAmplitude = 0.0; aAmplitude = 0.0; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Backward\n");
+    }
+    else if (strstr(get_line, "command=strafe_left")) {
+      xAmplitude = 0.0; yAmplitude = 0.35; aAmplitude = 0.0; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Strafe left\n");
+    }
+    else if (strstr(get_line, "command=strafe_right")) {
+      xAmplitude = 0.0; yAmplitude = -0.35; aAmplitude = 0.0; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Strafe right\n");
+    }
+    else if (strstr(get_line, "command=turn_left")) {
+      xAmplitude = 0.0; yAmplitude = 0.0; aAmplitude = 0.35; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Turn left\n");
+    }
+    else if (strstr(get_line, "command=turn_right")) {
+      xAmplitude = 0.0; yAmplitude = 0.0; aAmplitude = -0.35; webYawDeg = -1.0;
+      if (!isWalking) shouldStartWalk = true;
+      printf("Turn right\n");
+    }
+    else if (strstr(get_line, "command=move_stop")) {
+      xAmplitude = yAmplitude = aAmplitude = 0.0;
+      webYawDeg = -1.0;
+      if (isWalking) shouldStopWalk = true;
+      printf("Move stop\n");
+    }
+    else if (strstr(get_line, "command=set_yaw")) {
+      double yawDeg = 180.0;
+      if (readQueryDouble(get_line, "yaw=", &yawDeg)) {
+        webYawDeg = clampd(yawDeg, 0.0, 360.0);
+        printf("Set yaw: %.2f deg\n", webYawDeg);
+      }
+    }
+    else if (strstr(get_line, "command=yaw_off")) {
+      webYawDeg = -1.0;
+      printf("Yaw off\n");
+    }
+    else if (strstr(get_line, "command=eye_led_toggle")) {
+      shouldToggleEyeLed = true;
+    }
+    else if (strstr(get_line, "command=head_led_toggle")) {
+      shouldToggleHeadLed = true;
+    }
+    else if (strstr(get_line, "command=blink_toggle") || strstr(get_line, "command=led_blink_toggle")) {
+      shouldToggleBlink = true;
+    }
+    else if (strstr(get_line, "motion=")) {
+      int page = 0;
+      if (readQueryInt(get_line, "motion=", &page) && page > 0) {
+        queueMotionPage(page);
+        printf("Queued motion page: %d\n", page);
+      }
+    }
+    else if (strstr(get_line, "command=set_joint")) {
+      int idx = -1;
+      double value = 0.0;
+      if (readQueryInt(get_line, "index=", &idx) && readQueryDouble(get_line, "value=", &value)) {
+        if (idx >= 0 && idx < NMOTORS) {
+          targetPositions[idx] = clampd(value, minMotorPositions[idx], maxMotorPositions[idx]);
+          jointUpdated[idx] = true;
+          printf("Set joint %d -> %.3f\n", idx, targetPositions[idx]);
+        }
+      }
+    }
+    else if (strstr(get_line, "command=set_joints")) {
+      char valuesBuf[1024];
+      if (readQueryValue(get_line, "v=", valuesBuf, sizeof(valuesBuf))) {
+        char* tok = strtok(valuesBuf, ",");
+        int idx = 0;
+        while (tok && idx < NMOTORS) {
+          double v = 0.0;
+          if (parseFiniteDoubleToken(tok, &v)) {
+            targetPositions[idx] = clampd(v, minMotorPositions[idx], maxMotorPositions[idx]);
+            jointUpdated[idx] = true;
+          }
+          tok = strtok(NULL, ",");
+          ++idx;
+        }
+      }
+    }
+
+    pthread_mutex_unlock(&stateMutex);
+
+    // ✅ /?command=... /?motion=... 요청이면 HTML 말고 OK만
+    if (strstr(get_line, "GET /?")) {
+      sendText(client, "text/plain", "OK");
+      close(client);
+      continue;
+    }
+
+    // 루트(/) 요청일 때만 HTML 응답
+    char* response = load_html();
+    sendAll(client, response, strlen(response));
+    free(response);
+    close(client);
+  }
+
+  close(s);
+  return NULL;
 }
 
-RobotListener::~RobotListener() {
-    delete mMotionManager;
-    delete mGaitManager;
+Walk::Walk(): Robot() {
+  mTimeStep = getBasicTimeStep();
+  std::cerr << "[INFO] Controller started. TimeStep=" << mTimeStep << "\n";
+
+  // ---- Camera init ----
+  mCamera = getCamera("Camera");
+  if (mCamera) {
+    // ✅ camera sampling 느리게 (부하 감소)
+    mCamera->enable(6 * mTimeStep);
+    g_cameraWidth = mCamera->getWidth();
+    g_cameraHeight = mCamera->getHeight();
+    std::cerr << "[INFO] Camera enabled: "
+              << g_cameraWidth << "x" << g_cameraHeight << "\n";
+  } else {
+    std::cerr << "[WARN] Camera not found.\n";
+  }
+
+  mEyeLED  = getLED("EyeLed");
+  if (mEyeLED) mEyeLED->set(eyeLedColor);
+
+  mHeadLED = getLED("HeadLed");
+  if (mHeadLED) mHeadLED->set(headLedColor);
+
+  mAccelerometer = getAccelerometer("Accelerometer");
+  if (mAccelerometer == NULL) {
+    std::cerr << "[FATAL] Accelerometer not found.\n";
+    exit(EXIT_FAILURE);
+  }
+  mAccelerometer->enable(mTimeStep);
+
+  webots::Gyro* g = getGyro("Gyro");
+  if (g == NULL) {
+    std::cerr << "[FATAL] Gyro not found.\n";
+    exit(EXIT_FAILURE);
+  }
+  g->enable(mTimeStep);
+
+  int missingMotors = 0;
+  for (int i = 0; i < NMOTORS; ++i) {
+    mMotors[i] = getMotor(motorNames[i]);
+    if (mMotors[i] == NULL) {
+      std::cerr << "[ERROR] Motor not found: " << motorNames[i] << "\n";
+      missingMotors++;
+      continue;
+    }
+    minMotorPositions[i] = mMotors[i]->getMinPosition();
+    maxMotorPositions[i] = mMotors[i]->getMaxPosition();
+    targetPositions[i] = 0.0;
+    filteredPositions[i] = 0.0;
+  }
+  if (missingMotors) {
+    std::cerr << "[FATAL] Missing motors: " << missingMotors << "\n";
+    exit(EXIT_FAILURE);
+  }
+
+#ifndef CROSSCOMPILATION
+  keyboardEnable(mTimeStep);
+#endif
+
+  std::ifstream cfg("config.ini");
+  if (!cfg.good()) {
+    std::cerr << "[FATAL] config.ini not found in current dir.\n";
+    exit(EXIT_FAILURE);
+  }
+
+  mMotionManager = new DARwInOPMotionManager(this);
+  mGaitManager   = new DARwInOPGaitManager(this, "config.ini");
+  std::cerr << "[INFO] Managers initialized.\n";
 }
 
-void RobotListener::myStep() {
-    if (step(mTimeStep) == -1) exit(0);
+Walk::~Walk() {
+  delete mMotionManager;
+  delete mGaitManager;
 }
 
-void RobotListener::wait(int ms) {
-    double start = getTime();
-    while (start + ms/1000.0 > getTime()) myStep();
+void Walk::myStep() {
+  if (step(mTimeStep) == -1) exit(EXIT_SUCCESS);
 }
 
-void RobotListener::checkIfFallen() {
-    if (!mAccelerometer) return;
-    static int fup=0, fdown=0;
-    const double *acc = mAccelerometer->getValues();
-    if (acc[1] < 432.0) fup++; else fup=0;
-    if (acc[1] > 592.0) fdown++; else fdown=0;
-    if (fup > 100) { mMotionManager->playPage(10); mMotionManager->playPage(9); fup=0; }
-    if (fdown > 100) { mMotionManager->playPage(11); mMotionManager->playPage(9); fdown=0; }
+void Walk::wait(int ms) {
+  double t0 = getTime(), dur = ms / 1000.0;
+  while (getTime() < t0 + dur) myStep();
 }
 
-void RobotListener::run() {
-    signal(SIGINT, signal_handler);
+void Walk::updateLEDs() {
+  if (shouldToggleEyeLed) {
+    eyeLedOn = !eyeLedOn;
+    shouldToggleEyeLed = false;
+  }
+  if (shouldToggleHeadLed) {
+    headLedOn = !headLedOn;
+    shouldToggleHeadLed = false;
+  }
+  if (shouldToggleBlink) {
+    blinkMode = !blinkMode;
+    shouldToggleBlink = false;
+    lastBlinkTime = getTime();
+  }
 
-    pthread_t th;
-    pthread_create(&th, NULL, http_server, NULL);
+  if (blinkMode) {
+    double now = getTime();
+    if (now - lastBlinkTime > 0.35) {
+      blinkState = !blinkState;
+      lastBlinkTime = now;
+    }
+    if (blinkState) {
+      if (eyeLedOn && mEyeLED)  mEyeLED->set(eyeLedColor);
+      if (headLedOn && mHeadLED) mHeadLED->set(headLedColor);
+    } else {
+      if (mEyeLED)  mEyeLED->set(0x000000);
+      if (mHeadLED) mHeadLED->set(0x000000);
+    }
+  } else {
+    if (mEyeLED)  mEyeLED->set(eyeLedOn ? eyeLedColor : 0x000000);
+    if (mHeadLED) mHeadLED->set(headLedOn ? headLedColor : 0x000000);
+  }
+}
 
+void Walk::checkIfFallen() {
+  static int fup = 0;
+  static int fdown = 0;
+  static const double acc_tolerance = 80.0;
+  static const double acc_step = 100;
+
+  const double *acc = mAccelerometer->getValues();
+  if (acc[1] < 512.0 - acc_tolerance) fup++; else fup = 0;
+  if (acc[1] > 512.0 + acc_tolerance) fdown++; else fdown = 0;
+
+  if (fup > acc_step) {
+    mMotionManager->playPage(10);
+    mMotionManager->playPage(9);
+    fup = 0;
+  } else if (fdown > acc_step) {
+    mMotionManager->playPage(11);
+    mMotionManager->playPage(9);
+    fdown = 0;
+  }
+}
+
+void Walk::run() {
+  cout << "-------Walk example of DARwIn-OP Full Controller-------" << endl;
+  cout << "Web control:  http://localhost:8080" << endl;
+
+  pthread_t serverThread;
+  if (pthread_create(&serverThread, NULL, server, NULL) != 0) {
+    cout << "Failed to create server thread!" << endl;
+    return;
+  }
+
+  myStep();
+  mMotionManager->playPage(9);
+  wait(200);
+
+  bool gaitStarted = false;
+
+  // ✅ 카메라 인코딩 과부하 방지용 (warmup + throttle)
+  int camWarmup = 10;
+  double lastCamEnc = 0.0;
+
+  while (true) {
+    checkIfFallen();
+
+    // ---- 카메라 프레임 -> 최신 JPEG 갱신 (최대 ~8fps) ----
+    if (mCamera) {
+      double t = getTime();
+      if (camWarmup > 0) {
+        camWarmup--;
+      } else if ((t - lastCamEnc) > 0.12) {
+        const unsigned char* img = mCamera->getImage();
+        if (img) encodeToJPEG(img, g_cameraWidth, g_cameraHeight);
+        lastCamEnc = t;
+      }
+    }
+
+    pthread_mutex_lock(&stateMutex);
+
+    updateLEDs();
+
+    if (shouldStartWalk && !isWalking) {
+      mGaitManager->start();
+      mGaitManager->step(mTimeStep);
+      isWalking = true;
+      gaitStarted = true;
+      shouldStartWalk = false;
+      shouldStopWalk = false;
+    }
+
+    if (shouldStopWalk && isWalking) {
+      mGaitManager->stop();
+      isWalking = false;
+      gaitStarted = false;
+      shouldStopWalk = false;
+      shouldStartWalk = false;
+      xAmplitude = yAmplitude = aAmplitude = 0.0;
+    }
+
+    double now = getTime();
+    bool motionPlaying = (currentMotionPage != 0) && ((now - motionStartTime) < motionDuration);
+
+    if (!motionQueue.empty() && !isWalking && !motionPlaying) {
+      MotionCommand cmd = motionQueue.front();
+      motionQueue.pop();
+      mMotionManager->playPage(cmd.page, false);
+      currentMotionPage = cmd.page;
+      motionStartTime = now;
+      motionDuration = getMotionDuration(cmd.page);
+      motionPlaying = true;
+    }
+
+    if (!motionPlaying && currentMotionPage != 0) {
+      if (currentMotionPage != 1 && !isWalking) {
+        mMotionManager->playPage(1, false);
+        currentMotionPage = 1;
+        motionStartTime = now;
+        motionDuration = 2.0;
+      } else {
+        currentMotionPage = 0;
+      }
+    }
+
+    if (isWalking && gaitStarted) {
+      bool yawMode = (webYawDeg >= 0.0);
+      if (yawMode) {
+        targetYawRad = convertYawToNeckAngle(webYawDeg);
+        filteredYawRad = YAW_FILTER_ALPHA * targetYawRad + (1.0 - YAW_FILTER_ALPHA) * filteredYawRad;
+        filteredYawRad = clampd(filteredYawRad, minMotorPositions[NECK_INDEX], maxMotorPositions[NECK_INDEX]);
+        if (mMotors[NECK_INDEX]) {
+          mMotors[NECK_INDEX]->setPosition(filteredYawRad);
+        }
+
+        double yawDiff = fabs(targetYawRad - prevTargetYawRad);
+        if (fabs(xAmplitude) < 0.001 && fabs(yAmplitude) < 0.001 && fabs(aAmplitude) < 0.001) {
+          if (yawDiff < 0.1) {
+            mGaitManager->setXAmplitude(0.8);
+            mGaitManager->setYAmplitude(0.0);
+            mGaitManager->setAAmplitude(filteredYawRad * 0.5);
+          } else {
+            mGaitManager->setXAmplitude(0.4);
+            mGaitManager->setYAmplitude(0.0);
+            mGaitManager->setAAmplitude(filteredYawRad);
+          }
+        } else {
+          mGaitManager->setXAmplitude(xAmplitude);
+          mGaitManager->setYAmplitude(yAmplitude);
+          mGaitManager->setAAmplitude(aAmplitude);
+        }
+        mGaitManager->step(mTimeStep);
+        prevTargetYawRad = targetYawRad;
+      } else {
+        mGaitManager->setXAmplitude(xAmplitude);
+        mGaitManager->setYAmplitude(yAmplitude);
+        mGaitManager->setAAmplitude(aAmplitude);
+        mGaitManager->step(mTimeStep);
+      }
+    }
+
+    for (int i = 0; i < NMOTORS; ++i) {
+      if (!jointUpdated[i]) continue;
+      double alpha = (i == NECK_INDEX || i == HEAD_INDEX) ? 0.4 : JOINT_FILTER_ALPHA;
+      filteredPositions[i] = alpha * targetPositions[i] + (1.0 - alpha) * filteredPositions[i];
+      double safe = clampd(filteredPositions[i], minMotorPositions[i], maxMotorPositions[i]);
+      if (mMotors[i]) mMotors[i]->setPosition(safe);
+      if (fabs(filteredPositions[i] - targetPositions[i]) < 0.001) {
+        jointUpdated[i] = false;
+      }
+    }
+
+    pthread_mutex_unlock(&stateMutex);
     myStep();
-    printf("🤖 Setting initial pose (Stand)...\n");
-    mMotionManager->playPage(1, false);
-    wait(500);
-    
-    int w = mCamera ? mCamera->getWidth() : 1;
-    int h = mCamera ? mCamera->getHeight() : 1;
-
-    printf("✅ Ready. Waiting for commands...\n");
-    printf("📱 Dashboard: http://0.0.0.0:8080\n");
-
-    while (true) {
-        double now = getTime();
-        checkIfFallen();
-
-        if (mCamera) encodeToJPEG(mCamera->getImage(), w, h);
-
-        pthread_mutex_lock(&g_lock);
-        bool blink = g_blinkMode;
-        bool sWalk = g_startWalk; bool eWalk = g_stopWalk;
-        g_startWalk = false; g_stopWalk = false;
-        double x=g_xAmplitude, y=g_yAmplitude, a=g_aAmplitude;
-        pthread_mutex_unlock(&g_lock);
-
-        if (sWalk && !g_isWalking) { mGaitManager->start(); g_isWalking=true; }
-        if (eWalk && g_isWalking)  { mGaitManager->stop(); g_isWalking=false; }
-        if (g_isWalking) {
-            mGaitManager->setXAmplitude(x);
-            mGaitManager->setYAmplitude(y);
-            mGaitManager->setAAmplitude(a);
-            mGaitManager->step(mTimeStep);
-        }
-
-        bool playing = (now - g_motionStartTime) < g_motionDuration;
-        pthread_mutex_lock(&g_lock);
-        if (!g_motionQueue.empty() && !playing && !g_isWalking) {
-            MotionCommand cmd = g_motionQueue.front();
-            g_motionQueue.pop();
-            pthread_mutex_unlock(&g_lock);
-            
-            printf("▶️ Playing motion page: %d\n", cmd.page);
-            mMotionManager->playPage(cmd.page, false);
-            g_motionStartTime = now;
-            g_motionDuration = getMotionDuration(cmd.page);
-            g_currentMotion = cmd.page;
-        } else {
-            pthread_mutex_unlock(&g_lock);
-        }
-
-        // ========== 모터 적용 루프 - NaN 최종 방어 추가 ==========
-        pthread_mutex_lock(&g_lock);
-        for(int i=0; i<NMOTORS; i++) {
-            if(g_jointUpdated[i]) {
-                double alpha = (i >= 18) ? 0.5 : FILTER_ALPHA;
-                g_filteredPositions[i] = alpha * g_targetPositions[i] + (1.0-alpha)*g_filteredPositions[i];
-                
-                double safe;
-                if (i == NECK_MOTOR_INDEX) {
-                    safe = clampd(g_filteredPositions[i], -NECK_LIMIT, NECK_LIMIT);
-                } 
-                else if (i == HEAD_MOTOR_INDEX) {
-                    safe = clampd(g_filteredPositions[i], minMotorPositions[i], maxMotorPositions[i]);
-                }
-                else {
-                    safe = clampd(g_filteredPositions[i], minMotorPositions[i], maxMotorPositions[i]);
-                }
-                
-                // 최종 방어: NaN/Inf면 모터 호출 금지
-                if (!isFiniteD(safe)) {  // ✅ C++98: std::isfinite → isFiniteD
-                    g_jointUpdated[i] = false; // NaN이 계속 남아 무한 에러나는 것 방지
-                    continue;
-                }
-
-                if(mMotors[i]) mMotors[i]->setPosition(safe);
-                if(fabs(g_filteredPositions[i]-g_targetPositions[i]) < 0.001) g_jointUpdated[i]=false;
-            }
-        }
-        pthread_mutex_unlock(&g_lock);
-
-        if(mHeadLED) mHeadLED->set(0xFF0000);
-        
-        if(blink) {
-            if(now - g_lastBlinkT > 0.15) { 
-                g_blinkState = !g_blinkState; 
-                g_lastBlinkT = now; 
-            }
-            if(mEyeLED) mEyeLED->set(g_blinkState ? 0x00FF00 : 0x000000);
-        } else {
-            if(mEyeLED) mEyeLED->set(0x00FF00);
-        }
-
-        if(!playing && g_currentMotion != 0) {
-            if(g_currentMotion != 1 && !g_isWalking) {
-                printf("⏹️ Motion %d completed, returning to stand\n", g_currentMotion);
-                mMotionManager->playPage(1, false);
-                g_motionStartTime = now;
-                g_motionDuration = 2.0;
-                g_currentMotion = 1;
-                wait(200);
-            } else {
-                g_currentMotion = 0;
-            }
-        }
-
-        myStep();
-    }
-}
-
-int main() {
-    RobotListener robot;
-    robot.run();
-    return 0;
+  }
 }
