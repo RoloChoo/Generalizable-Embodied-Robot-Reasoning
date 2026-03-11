@@ -1,9 +1,12 @@
 // settings.js (ESM)
 import path from 'path';
 import fs from 'fs';
+import process from 'node:process';
 
 // 기본 설정
 const settings = {
+  runtime_mode: process.env.RUNTIME_MODE || 'standalone',
+
   // --- Minecraft / Mindserver ---
   minecraft_version: '1.21.1', // supports up to 1.21.6
   host: '127.0.0.1',
@@ -52,26 +55,37 @@ const settings = {
   stt_transcription: true,
   stt_provider: 'groq',
   stt_username: 'koreayang',
-  stt_agent_name: 'claude',
+  stt_agent_name: '',
 
-  stt_tts_cooldown: 300,
-  stt_rms_threshold: 2000,
+  stt_tts_cooldown: 800,
+  stt_rms_threshold: 3000,
   stt_silence_duration: 800,
-  stt_min_audio_duration: 0.3,
+  stt_min_audio_duration: 0.45,
   stt_max_audio_duration: 8,
   stt_debug_audio: false,
-  stt_cooldown_ms: 300,
-  stt_speech_threshold_ratio: 0.1,
-  stt_consecutive_speech_samples: 1,
+  stt_cooldown_ms: 700,
+  stt_speech_threshold_ratio: 0.15,
+  stt_consecutive_speech_samples: 3,
+  stt_start_timeout_ms: 1700,
+  stt_min_voiced_ms: 320,
+  stt_quiet_portaudio_logs: true,
+  stt_loop_idle_delay_ms: 700,
+  stt_loop_active_delay_ms: 250,
 
   log_normal_data: false,
   log_reasoning_data: false,
   log_vision_data: false,
 
   // --- Robot HTTP (한 군데만 진짜 소스) ---
-  robot_base_url: process.env.ROBOT_BASE_URL || 'http://175.199.234.241:8080',
+  robot_base_url: process.env.ROBOT_BASE_URL || 'http://222.96.18.213:8080',
   http_timeout_ms: Number(process.env.ROBOT_HTTP_TIMEOUT_MS ?? 1500),
   max_http_retries: Number(process.env.ROBOT_MAX_HTTP_RETRIES ?? 3),
+  robot_default_mood: process.env.ROBOT_DEFAULT_MOOD || 'neutral',
+  robot_idle_emotion_enabled: process.env.ROBOT_IDLE_EMOTION_ENABLED
+    ? JSON.parse(process.env.ROBOT_IDLE_EMOTION_ENABLED)
+    : true,
+  robot_idle_emotion_min_idle_ms: Number(process.env.ROBOT_IDLE_EMOTION_MIN_IDLE_MS ?? 8000),
+  robot_idle_emotion_tick_ms: Number(process.env.ROBOT_IDLE_EMOTION_TICK_MS ?? 1800),
 };
 
 // ===== 외부 JSON으로 덮어쓰기 (선택) =====
@@ -93,12 +107,17 @@ if (process.env.SETTINGS_PATH) {
 
 // ===== 환경변수 덮어쓰기 (선택) =====
 if (process.env.MINECRAFT_VERSION) settings.minecraft_version = process.env.MINECRAFT_VERSION;
+if (process.env.RUNTIME_MODE) settings.runtime_mode = process.env.RUNTIME_MODE;
 if (process.env.HOST) settings.host = process.env.HOST;
 if (process.env.PORT) settings.port = parseInt(process.env.PORT, 10);
 if (process.env.MINECRAFT_PORT) settings.port = parseInt(process.env.MINECRAFT_PORT, 10);
 if (process.env.AUTH) settings.auth = process.env.AUTH;
 
 if (process.env.MINDSERVER_PORT) settings.mindserver_port = parseInt(process.env.MINDSERVER_PORT, 10);
+if (process.env.ROBOT_DEFAULT_MOOD) settings.robot_default_mood = process.env.ROBOT_DEFAULT_MOOD;
+if (process.env.ROBOT_IDLE_EMOTION_ENABLED) settings.robot_idle_emotion_enabled = JSON.parse(process.env.ROBOT_IDLE_EMOTION_ENABLED);
+if (process.env.ROBOT_IDLE_EMOTION_MIN_IDLE_MS) settings.robot_idle_emotion_min_idle_ms = parseInt(process.env.ROBOT_IDLE_EMOTION_MIN_IDLE_MS, 10);
+if (process.env.ROBOT_IDLE_EMOTION_TICK_MS) settings.robot_idle_emotion_tick_ms = parseInt(process.env.ROBOT_IDLE_EMOTION_TICK_MS, 10);
 
 if (process.env.PROFILES) {
   try {
