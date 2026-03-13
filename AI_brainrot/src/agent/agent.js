@@ -1,6 +1,7 @@
 // src/agent/agent.js
 import fs from 'fs';
 import path from 'path';
+import process from 'node:process';
 import * as logger from '../../logger.js';
 import { History } from './history.js';
 import { Coder } from './coder.js';
@@ -8,6 +9,14 @@ import { VisionInterpreter } from './vision/vision_interpreter.js';
 import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
+import {
+  capturePendingConfirmation,
+  createExecutiveState,
+  ensureTaskContext,
+  rewriteMessageForExecutive,
+  resolveTaskAfterCommand,
+  shouldSuppressAmbient,
+} from '../executive/minimal_executive.js';
 import {
   containsCommand,
   commandExists,
@@ -23,10 +32,38 @@ import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
+import { stripUserFacingMarkdown } from '../utils/text.js';
 import settings from '../../settings.js';
 import { serverProxy } from './agent_proxy.js';
-import { Task } from './tasks/tasks.js';
 import { say } from './speak.js';
+
+class FallbackTask {
+  constructor(_agent, _taskPath = null, task_id = null, taskStart = Date.now()) {
+    this.task_id = task_id;
+    this.taskStartTime = taskStart;
+    this.blocked_actions = [];
+    this.agent_names = [];
+    this.blueprint = null;
+  }
+
+  initBotTask() {}
+  setAgentGoal() {}
+}
+
+let taskModulePromise = null;
+
+function getTaskClass() {
+  if (!taskModulePromise) {
+    taskModulePromise = import('./tasks/tasks.js')
+      .then((mod) => mod.Task || FallbackTask)
+      .catch((error) => {
+        console.warn('Task module unavailable, using fallback task stub:', error.message);
+        return FallbackTask;
+      });
+  }
+
+  return taskModulePromise;
+}
 
 // ✅ 내부 로그 메시지 목록 (발화/채팅 출력 억제 대상)
 const INTERNAL_LOG_MESSAGES = [
@@ -38,6 +75,7 @@ const INTERNAL_LOG_MESSAGES = [
 
 export class Agent {
   constructor() {
+    this.runtime_mode = 'minecraft';
     this._lastChatTime = Date.now();
     this._idleTriggered = false;
     this._lastModelResponseTime = Date.now();
@@ -46,13 +84,28 @@ export class Agent {
     this._suppressNextOutput = false;
     // ✅ 명령 디바운스(중복 실행 방지)
     this._cmdDebounce = Object.create(null);
+    this.executive = createExecutiveState();
+  }
+
+  _syncExecutiveAmbientState() {
+    const shouldSuppress = shouldSuppressAmbient(this.executive);
+    if (shouldSuppress === this.executive.ambientSuppressed) return;
+
+    this.executive.ambientSuppressed = shouldSuppress;
+    const socket = serverProxy.getSocket();
+    if (socket) {
+      socket.emit('robot-executive-ambient', {
+        suppress: shouldSuppress,
+        reason: shouldSuppress ? 'awaiting_user' : null,
+      });
+    }
   }
 
   async start(profile_fp, load_mem = false, init_message = null, count_id = 0, task_path = null, task_id = null) {
     this.last_sender = null;
 
     // STT 코드에서 agent 접근 가능하게 글로벌에 붙임
-    const globalObj = (typeof global !== 'undefined') ? global : globalThis;
+    const globalObj = globalThis;
     try { globalObj.agent = this; } catch (e) { console.warn('Failed attaching agent to global object:', e); }
 
     this.latestScreenshotPath = null;
@@ -77,7 +130,8 @@ export class Agent {
     let save_data = null;
     if (load_mem) save_data = this.history.load();
     const taskStart = save_data ? save_data.taskStart : Date.now();
-    this.task = new Task(this, task_path, task_id, taskStart);
+    const TaskClass = await getTaskClass();
+    this.task = new TaskClass(this, task_path, task_id, taskStart);
     this.blocked_actions = settings.blocked_actions.concat(this.task.blocked_actions || []);
     blacklistCommands(this.blocked_actions);
 
@@ -86,6 +140,9 @@ export class Agent {
     console.log(this.name, 'logging into minecraft...');
     this.bot = initBot(this.name);
     initModes(this);
+    console.log('Initializing plugins...');      await this.plugin.init();
+    console.log('Refreshing skill library...');  await this.prompter.refreshSkillLibrary();
+    await this.prompter.skill_libary.initSkillLibrary();
 
     this.bot.on('login', () => {
       console.log(this.name, 'logged in!');
@@ -336,6 +393,15 @@ export class Agent {
         }
 
         const execute_res = await executeCommand(this, message);
+        resolveTaskAfterCommand(this.executive, {
+          executed: true,
+          success: typeof execute_res === 'object' && execute_res !== null
+            ? execute_res.success !== false
+            : !(typeof execute_res === 'string' && /error|failed|does not exist/i.test(execute_res)),
+          result: execute_res,
+          error: typeof execute_res === 'string' ? execute_res : execute_res?.error,
+        });
+        this._syncExecutiveAmbientState();
 
         const ECHO_CMD_RESULT = settings.echo_command_result_to_chat ?? false;
         if (ECHO_CMD_RESULT && execute_res) {
@@ -346,11 +412,25 @@ export class Agent {
         }
         return true;
       }
+
+      ensureTaskContext(this.executive, message);
     }
 
     if (from_other_bot) this.last_sender = source;
 
     message = await handleEnglishTranslation(message);
+
+    if (!self_prompt && !from_other_bot) {
+      const executiveRewrite = rewriteMessageForExecutive(this.executive, message);
+      if (executiveRewrite.directResponse) {
+        await this.history.add(this.name, executiveRewrite.directResponse, null);
+        this.routeResponse(source, executiveRewrite.directResponse);
+        this._syncExecutiveAmbientState();
+        return false;
+      }
+      message = executiveRewrite.messageForModel || message;
+    }
+
     console.log('received message from', source, ':', message);
 
     const checkInterrupt = () =>
@@ -386,6 +466,10 @@ export class Agent {
       // ✅ 모델에게는 system 턴을 절대 보내지 않음
       const history_for_prompt = this.history.getHistory().filter(t => t.role !== 'system');
       let res = await this.prompter.promptConvo(history_for_prompt);
+      if (!self_prompt && !from_other_bot) {
+        capturePendingConfirmation(this.executive, res);
+        this._syncExecutiveAmbientState();
+      }
 
       this._lastModelResponseTime = Date.now();
 
@@ -447,6 +531,17 @@ export class Agent {
         let execute_res = await executeCommand(this, res);
         console.log('Agent executed:', command_name, 'and got:', execute_res);
         used_command = true;
+        if (!self_prompt && !from_other_bot) {
+          resolveTaskAfterCommand(this.executive, {
+            executed: true,
+            success: typeof execute_res === 'object' && execute_res !== null
+              ? execute_res.success !== false
+              : !(typeof execute_res === 'string' && /error|failed|does not exist/i.test(execute_res)),
+            result: execute_res,
+            error: typeof execute_res === 'string' ? execute_res : execute_res?.error,
+          });
+          this._syncExecutiveAmbientState();
+        }
 
         if (execute_res) {
           let imagePathForCommandResult = null;
@@ -488,7 +583,7 @@ export class Agent {
     return used_command;
   }
 
-  async routeResponse(to_player, message) {
+  routeResponse(to_player, message) {
     if (this.shut_up) return;
 
     const self_prompt = to_player === 'system' || to_player === this.name;
@@ -520,6 +615,8 @@ export class Agent {
     // suppress 상태에서도 번역은 수행
     message = (await handleTranslation(to_translate)).trim() + ' ' + remaining;
     message = message.replaceAll('\\n', ' ');
+    message = stripUserFacingMarkdown(message);
+    to_translate = stripUserFacingMarkdown(to_translate);
 
     // ✅ system/self면 web-client emit도 막음
     if (!suppress && serverProxy.getSocket()) {
@@ -604,7 +701,7 @@ export class Agent {
       this.cleanKill('Bot kicked! Killing agent process.');
     });
 
-    this.bot.on('messagestr', async (message, _, jsonMsg) => {
+    this.bot.on('messagestr', (message, _, jsonMsg) => {
       if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
         console.log('Agent died: ', message);
         const death_pos = this.bot.entity?.position;
@@ -647,7 +744,6 @@ export class Agent {
       this.actions.resumeAction();
     });
 
-    this.plugin.init();
     this.npc.init();
 
     const INTERVAL = 300;
