@@ -3,12 +3,24 @@ export class MemoryBank {
 		this.memory = {};
 	}
 
+	remember(name, value) {
+		this.memory[name] = value;
+	}
+
+	recall(name) {
+		return this.memory[name];
+	}
+
+	forget(name) {
+		delete this.memory[name];
+	}
+
 	rememberPlace(name, x, y, z) {
-		this.memory[name] = [x, y, z];
+		this.remember(name, [x, y, z]);
 	}
 
 	recallPlace(name) {
-		return this.memory[name];
+		return this.recall(name);
 	}
 
 	getJson() {
